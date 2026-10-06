@@ -449,10 +449,18 @@ func _process(delta: float) -> void:
 		if _log_timer >= 1.0:
 			_log_timer = 0.0
 			var st := local_state()
-			print("[%s id=%d] ball=%s players=%d rtt=%dms corr_last=%.3f corr_max=%.3f pos=(%.1f,%.1f) speed=%.1f" % [
+			_log("[%s id=%d] ball=%s players=%d rtt=%dms corr_last=%.3f corr_max=%.3f pos=(%.1f,%.1f) speed=%.1f" % [
 				"host" if mode == Mode.HOST else "client", local_id, ["loose", "held", "flight"][int(view_ball.get("kind", 0))], athletes.size(), int(rtt * 1000.0),
 				last_correction, max_correction, st.pos.x, st.pos.y, st.speed])
 			max_correction = 0.0
+
+
+func _log(line: String) -> void:
+	print(line)
+	var f := FileAccess.open("user://footy_log.txt", FileAccess.READ_WRITE if FileAccess.file_exists("user://footy_log.txt") else FileAccess.WRITE)
+	if f:
+		f.seek_end()
+		f.store_line(line)
 
 
 func local_state() -> AthleteState:
@@ -531,7 +539,7 @@ func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: floa
 		landing_on = true
 		land = fl["land"]
 	if log_enabled and view_ball.get("kind", -1) != kind:
-		print("[id=%d] ball -> %s%s" % [local_id, ["loose", "held", "flight"][kind],
+		_log("[id=%d] ball -> %s%s" % [local_id, ["loose", "held", "flight"][kind],
 			(" land=(%.1f, %.1f) lob=%s" % [land.x, land.z, lob]) if landing_on else ""])
 	view_ball = {"kind": kind, "holder": holder}
 	if ball_view:

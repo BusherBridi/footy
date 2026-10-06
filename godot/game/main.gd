@@ -28,6 +28,8 @@ func _ready() -> void:
 	session.local_ready.connect(func(a: Athlete): camera.target = a)
 	session.disconnected.connect(_on_disconnected)
 	session.log_enabled = args.has("log")
+	if args.has("log"):
+		print("Footy started with args: ", OS.get_cmdline_user_args(), "  log file: ", ProjectSettings.globalize_path("user://footy_log.txt"))
 	session.name = "NetSession"
 	add_child(session)
 
@@ -172,7 +174,10 @@ func _process(_delta: float) -> void:
 		role = "HOST"
 	elif session.mode == NetSession.Mode.CLIENT:
 		role = "CLIENT rtt %d ms, correction %.2f m" % [int(session.rtt * 1000.0), session.last_correction]
-	hud.text = "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
+	var bot_tag := ""
+	if brain:
+		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "LOB" if lob else "BULLET",
