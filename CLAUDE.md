@@ -18,7 +18,7 @@ Footy is an arcade, Rematch-style American football game. Each human controls ex
 ## Engineering decisions
 
 - Godot 4.
-- Online multiplayer from the start, with no bots.
+- Online multiplayer from the start. Bots are allowed (agreed Oct 2026): they drive test clients through the normal input path. Whether bots also fill empty slots in real matches is still open.
 - One server-authoritative "referee" decides tackles, catches and fumbles.
   - For now a player hosts (listen server).
   - Keep the code able to run as a headless dedicated server later.

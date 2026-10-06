@@ -7,7 +7,7 @@ Oct 4, 2026 · @Busher Bridi
 An arcade American football game in the spirit of Rematch, where every human controls exactly one athlete. It is fast and skill-driven, not a simulation, and every player matters on every play.
 
 - Engine: Godot 4.
-- Online multiplayer from the start, with no bots.
+- Online multiplayer from the start. Bots are allowed (agreed Oct 2026): they drive test clients through the normal input path. Whether bots also fill empty slots in real matches is still open.
 - Placeholder art only, and no AI-generated art. The prototype proves the core gameplay.
 
 Everything in this doc is a starting point and subject to change after playtesting. The build keeps rules, numbers and modes swappable (tuning file, in-game toggles) so nothing is locked in.
@@ -209,7 +209,7 @@ The biggest risk is lag, especially a tackle between two players with poor conne
 
 ## Build order and open questions
 
-Networking comes first, since it was chosen over bots, and each step adds one piece of the play loop:
+Networking comes first, since it was chosen first, and each step adds one piece of the play loop:
 
 1. Two or more players running around a field online, with movement tuned until it feels good.
 2. Free-aim throwing and catching.
@@ -224,4 +224,5 @@ Open questions:
 - [ ] Confirm the proposed numbers in Format and rules.
 - [ ] Which 6 to 8 plays go in the first playbook?
 - [ ] Should playtests allow fewer than 5 per side, such as 3v3, when not enough people are online?
-- [ ] Controller only, or keyboard and mouse too?
+- [ ] Should bots fill empty slots in real matches, or only drive test clients?
+- [x] Controller and keyboard+mouse both supported (decided during step 1).
