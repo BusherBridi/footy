@@ -36,6 +36,16 @@
     "follow_smoothing": 14.0
   },
   "net": {
-    "tick_hz": 30
+    "port": 7777,
+    "max_players": 10,
+    "tick_hz": 30,
+    "interp_delay_ticks": 3,
+    "input_redundancy": 3,
+    "max_input_queue": 4,
+    "snap_error_m": 3.0,
+    "correction_decay": 12.0,
+    "sim_latency_ms": 0,
+    "sim_jitter_ms": 0,
+    "sim_loss_pct": 0
   }
 }

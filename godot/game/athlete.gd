@@ -1,9 +1,9 @@
 class_name Athlete
 extends Node3D
 ## Placeholder visual for one athlete: capsule plus a nose box showing facing.
-## Holds an AthleteState; movement is stepped from outside via Movement.step.
+## Pure visual; the simulation state lives in AthleteState.
 
-var state := AthleteState.new()
+var _body_mat := StandardMaterial3D.new()
 
 
 func _init() -> void:
@@ -11,9 +11,7 @@ func _init() -> void:
 	var cap := CapsuleMesh.new()
 	cap.radius = 0.4
 	cap.height = 1.8
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.9, 0.8, 0.2)
-	cap.material = mat
+	cap.material = _body_mat
 	body.mesh = cap
 	body.position.y = 0.9
 	add_child(body)
@@ -29,6 +27,10 @@ func _init() -> void:
 	add_child(nose)
 
 
-func sync_visual() -> void:
-	position = Vector3(state.pos.x, 0.0, state.pos.y)
-	rotation.y = atan2(-state.heading.x, -state.heading.y)
+func set_color(c: Color) -> void:
+	_body_mat.albedo_color = c
+
+
+func set_visual(pos: Vector2, heading: Vector2) -> void:
+	position = Vector3(pos.x, 0.0, pos.y)
+	rotation.y = atan2(-heading.x, -heading.y)
