@@ -1,0 +1,41 @@
+{
+  "field": {
+    "yard_m": 0.9144,
+    "length_yards": 60,
+    "width_yards": 30,
+    "endzone_yards": 8
+  },
+  "movement": {
+    "run_speed": 7.0,
+    "sprint_multiplier": 1.25,
+    "accel_time": 1.0,
+    "stop_time": 0.35,
+    "snap_speed": 1.0,
+    "turn_rate_slow_deg": 720.0,
+    "turn_rate_fast_deg": 200.0,
+    "misaligned_speed_floor": 0.35,
+    "cut_enabled": true,
+    "cut_min_angle_deg": 50.0,
+    "cut_min_input": 0.9,
+    "cut_min_speed": 3.0,
+    "cut_plant_time": 0.15,
+    "cut_speed_keep": 0.6,
+    "cut_cooldown": 0.35,
+    "sprint_seconds": 4.0,
+    "stamina_regen_jog_seconds": 12.0,
+    "stamina_regen_stand_seconds": 6.0
+  },
+  "camera": {
+    "distance": 7.0,
+    "height": 2.2,
+    "pitch_deg": -18.0,
+    "pitch_min_deg": -60.0,
+    "pitch_max_deg": 10.0,
+    "mouse_sensitivity": 0.003,
+    "stick_sensitivity_deg": 150.0,
+    "follow_smoothing": 14.0
+  },
+  "net": {
+    "tick_hz": 30
+  }
+}

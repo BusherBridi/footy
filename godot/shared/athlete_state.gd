@@ -1,0 +1,24 @@
+class_name AthleteState
+extends RefCounted
+## Everything the movement step needs. Plain data so it can be copied for
+## client prediction and replayed on the server.
+
+var pos := Vector2.ZERO          # x, z on the field plane (metres)
+var heading := Vector2(0, -1)    # unit direction of travel / facing
+var speed := 0.0
+var stamina := 1.0               # 0..1
+var cut_timer := 0.0             # >0 while planted in a cut
+var cut_cooldown := 0.0
+var prev_dir := Vector2.ZERO     # last frame's stick direction, for flick detection
+
+
+func copy() -> AthleteState:
+	var s := AthleteState.new()
+	s.pos = pos
+	s.heading = heading
+	s.speed = speed
+	s.stamina = stamina
+	s.cut_timer = cut_timer
+	s.cut_cooldown = cut_cooldown
+	s.prev_dir = prev_dir
+	return s
