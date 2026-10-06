@@ -47,6 +47,8 @@ func _ready() -> void:
 
 	if args.has("host"):
 		_host()
+		for i in int(args.get("bots", 0)):
+			session.host_add_bot()
 	elif args.has("join"):
 		_join(String(args["join"]))
 
@@ -157,6 +159,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
+	if Input.is_action_just_pressed("add_bot"):
+		session.host_add_bot()
+	if Input.is_action_just_pressed("clear_bots"):
+		session.host_clear_bots()
 	if Input.is_action_just_pressed("lob_toggle"):
 		lob = not lob
 	if Input.is_action_just_pressed("take_ball"):
@@ -177,7 +183,7 @@ func _process(_delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "LOB" if lob else "BULLET",

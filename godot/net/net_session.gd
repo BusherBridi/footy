@@ -36,6 +36,8 @@ var log_enabled := false
 var sv_players := {}                  # peer id -> SvPlayer
 var sv_tick := 0
 var _sv_next_spawn := 0
+var sv_bots := {}                    # negative id -> BotBrain (host-side test bots)
+var _next_bot_id := -1
 
 # Ball (server truth; clients read it from snapshots)
 var ball_kind := Ball.LOOSE
@@ -146,6 +148,26 @@ func _on_lost() -> void:
 	disconnected.emit()
 
 
+## Dev helper: a receiver driven by the host itself. It uses the same movement
+## code and input queue as a real player, but not the network connection.
+func host_add_bot() -> void:
+	if mode != Mode.HOST:
+		return
+	var id := _next_bot_id
+	_next_bot_id -= 1
+	_add_sv_player(id)
+	var b := BotBrain.new()
+	b.route_name = "random"
+	sv_bots[id] = b
+
+
+func host_clear_bots() -> void:
+	for id in sv_bots:
+		sv_players.erase(id)
+		_remove_athlete(id)
+	sv_bots.clear()
+
+
 func _on_peer_connected(id: int) -> void:
 	_add_sv_player(id)
 
@@ -193,6 +215,12 @@ func _host_tick(dt: float) -> void:
 	var me: SvPlayer = sv_players[1]
 	me.last_seq += 1
 	me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
+
+	for id in sv_bots:
+		var bp: SvPlayer = sv_players[id]
+		var bi: Dictionary = sv_bots[id].think(bp.state.pos, dt, Tuning.data, false)
+		bp.last_seq += 1
+		bp.queue.append([bp.last_seq, bi["move"], bi["sprint"]])
 
 	var max_q: int = int(_net()["max_input_queue"])
 	for id in sv_players:
@@ -453,6 +481,9 @@ func _process(delta: float) -> void:
 				"host" if mode == Mode.HOST else "client", local_id, ["loose", "held", "flight"][int(view_ball.get("kind", 0))], athletes.size(), int(rtt * 1000.0),
 				last_correction, max_correction, st.pos.x, st.pos.y, st.speed])
 			max_correction = 0.0
+			for bid in sv_bots:
+				var bs: AthleteState = sv_players[bid].state
+				_log("    bot %d pos=(%.1f,%.1f) speed=%.1f" % [bid, bs.pos.x, bs.pos.y, bs.speed])
 
 
 func _log(line: String) -> void:
@@ -551,7 +582,7 @@ func _ensure_athlete(id: int) -> Athlete:
 	if athletes.has(id):
 		return athletes[id]
 	var a := Athlete.new()
-	a.set_color(Color(0.9, 0.8, 0.2) if id == local_id else Color(0.3, 0.5, 0.95))
+	a.set_color(Color(0.9, 0.8, 0.2) if id == local_id else (Color(0.75, 0.3, 0.75) if id < 0 else Color(0.3, 0.5, 0.95)))
 	athlete_parent.add_child(a)
 	athletes[id] = a
 	if id == local_id:
