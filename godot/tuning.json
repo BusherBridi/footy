@@ -72,7 +72,12 @@
     "min_flight_time": 0.25,
     "ball_radius": 0.3,
     "held_height": 1.2,
-    "marker_radius": 1.0
+    "marker_radius": 1.0,
+    "aim_pitch_short_deg": -5.0,
+    "aim_pitch_far_deg": 40.0,
+    "aim_curve": 1.0,
+    "aim_pitch_limit_deg": 60.0,
+    "arc_points": 28
   },
   "bot": {
     "routes_yards": {

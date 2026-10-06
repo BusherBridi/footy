@@ -12,6 +12,7 @@ var target: Node3D
 var cam := Camera3D.new()
 var qb := false
 var qb_style := 0
+var aiming := false
 var _pivot := Vector3.ZERO
 var _dist := 7.0
 var _height := 2.2
@@ -38,6 +39,14 @@ func set_qb(on: bool) -> void:
 	if on != qb:
 		qb = on
 		pitch = deg_to_rad(_profile()["pitch_deg"])
+
+
+## While aiming, the camera may tilt much further up (a long throw hides the field).
+func set_aiming(on: bool) -> void:
+	if on != aiming:
+		aiming = on
+		if not on and qb:
+			pitch = deg_to_rad(_profile()["pitch_deg"])
 
 
 func cycle_style() -> void:
@@ -77,7 +86,8 @@ func _process(delta: float) -> void:
 
 
 func _clamp_pitch(c: Dictionary) -> void:
-	pitch = clampf(pitch, deg_to_rad(c["pitch_min_deg"]), deg_to_rad(c["pitch_max_deg"]))
+	var hi: float = Tuning.section("throw")["aim_pitch_limit_deg"] if aiming else c["pitch_max_deg"]
+	pitch = clampf(pitch, deg_to_rad(c["pitch_min_deg"]), deg_to_rad(hi))
 
 
 ## Camera-relative stick input -> world-plane direction (x, z).

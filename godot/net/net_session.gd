@@ -22,6 +22,7 @@ class SvPlayer:
 	var last_sprint := false
 
 enum Ball { LOOSE, HELD, FLIGHT }
+enum ThrowMode { AIM, HOLD }   # AIM: look up = further, tap to throw. HOLD: charge by holding.
 
 const SNAP_STRIDE := 11   # floats per player (id travels in a separate int array)
 
@@ -56,6 +57,7 @@ var throw_charging := false
 var aim_active := false
 var aim_pos := Vector2.ZERO
 var aim_lob := false
+var aim_arc := PackedVector3Array()
 var latest_holder := 0         # newest holder seen in a snapshot (undelayed)
 var view_ball := {}            # what the delayed view currently shows (for logs/HUD)
 
@@ -377,16 +379,20 @@ func _ball_input(inp: Dictionary, dt: float) -> void:
 	var yaw: float = inp.get("yaw", 0.0)
 	var lob: bool = inp.get("lob", false)
 	var holding: bool = aiming and inp.get("throw", false)
-	if holding:
+	if inp.get("mode", ThrowMode.HOLD) == ThrowMode.AIM:
+		throw_charging = false
+		if aiming:
+			throw_charge = BallFlight.charge_from_pitch(inp.get("pitch", 0.0), Tuning.data)
+			if inp.get("throw_tap", false):
+				_do_throw(throw_charge, yaw, lob)
+		else:
+			throw_charge = 0.0
+	elif holding:
 		throw_charge = minf(1.0, throw_charge + dt / float(Tuning.section("throw")["charge_time"]))
 		throw_charging = true
 	elif throw_charging:
 		if aiming:
-			if mode == Mode.HOST:
-				_sv_throw(1, throw_charge, yaw, lob)
-			else:
-				var c := throw_charge
-				_send(func(): if cl_connected: rpc_id(1, "rpc_throw", c, yaw, lob))
+			_do_throw(throw_charge, yaw, lob)
 		throw_charge = 0.0
 		throw_charging = false
 	elif not aiming:
@@ -394,7 +400,17 @@ func _ball_input(inp: Dictionary, dt: float) -> void:
 	aim_active = aiming
 	aim_lob = lob
 	if aiming:
-		aim_pos = BallFlight.target_for(local_state().pos, yaw, throw_charge, Tuning.data)
+		var here := local_state().pos
+		aim_pos = BallFlight.target_for(here, yaw, throw_charge, Tuning.data)
+		var p0 := Vector3(here.x, float(Tuning.section("throw")["release_height"]), here.y)
+		aim_arc = BallFlight.arc_points(p0, yaw, throw_charge, lob, Tuning.data)
+
+
+func _do_throw(charge: float, yaw: float, lob: bool) -> void:
+	if mode == Mode.HOST:
+		_sv_throw(1, charge, yaw, lob)
+	else:
+		_send(func(): if cl_connected: rpc_id(1, "rpc_throw", charge, yaw, lob))
 
 
 # -------------------------------------------------------------- reconciliation
@@ -470,7 +486,7 @@ func _process(delta: float) -> void:
 	elif mode == Mode.CLIENT and cl_state != null:
 		_update_client_visuals(delta)
 	if ball_view:
-		ball_view.set_aim(aim_active, aim_pos, aim_lob, float(Tuning.section("throw")["marker_radius"]))
+		ball_view.set_aim(aim_active, aim_pos, aim_lob, float(Tuning.section("throw")["marker_radius"]), aim_arc)
 
 	if log_enabled and mode != Mode.NONE:
 		_log_timer += delta

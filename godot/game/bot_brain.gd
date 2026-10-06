@@ -7,6 +7,8 @@ extends RefCounted
 ## With is_qb it also takes the ball and throws downfield now and then.
 
 var is_qb := false
+var aim_mode := false           # throw with the look-up aim + tap instead of hold-to-charge
+var _pitch := 0.0
 var route_name := ""            # empty = wander
 var target := Vector2.ZERO
 var timer := 0.0
@@ -105,11 +107,13 @@ func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void
 				_charge_left = rng.randf_range(0.3, 1.0) * float(tuning["throw"]["charge_time"])
 				_lob = rng.randf() < 0.5
 				_yaw = rng.randf_range(-0.25, 0.25)   # 0 = straight downfield (-z)
+				_pitch = deg_to_rad(rng.randf_range(float(tuning["throw"]["aim_pitch_short_deg"]), float(tuning["throw"]["aim_pitch_far_deg"])))
 		1:  # hold aim + throw while charging
 			out["aiming"] = true
-			out["throw"] = true
+			out["throw"] = not aim_mode
 			out["yaw"] = _yaw
 			out["lob"] = _lob
+			_aim_fields(out)
 			_charge_left -= dt
 			if _charge_left <= 0.0:
 				_phase = 2
@@ -118,6 +122,14 @@ func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void
 			out["throw"] = false
 			out["yaw"] = _yaw
 			out["lob"] = _lob
+			_aim_fields(out)
+			out["throw_tap"] = aim_mode
 			_phase = 0
 			_throw_wait = rng.randf_range(2.0, 4.0)
 			_take_cd = 4.0   # let the ball fly before grabbing it again
+
+
+func _aim_fields(out: Dictionary) -> void:
+	if aim_mode:
+		out["mode"] = 0   # NetSession.ThrowMode.AIM
+		out["pitch"] = _pitch

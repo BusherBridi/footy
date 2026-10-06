@@ -26,6 +26,23 @@ static func position_at(p0: Vector3, fl: Dictionary, g: float, time: float) -> V
 	return p0 + fl["v0"] * tt - Vector3(0.0, 0.5 * g * tt * tt, 0.0)
 
 
+## Grenade-style aim: the further up you look, the further the throw.
+static func charge_from_pitch(pitch_rad: float, tuning: Dictionary) -> float:
+	var t: Dictionary = tuning["throw"]
+	var x := inverse_lerp(float(t["aim_pitch_short_deg"]), float(t["aim_pitch_far_deg"]), rad_to_deg(pitch_rad))
+	return pow(clampf(x, 0.0, 1.0), float(t["aim_curve"]))
+
+
+## Sampled flight path for the aim preview.
+static func arc_points(p0: Vector3, yaw: float, charge: float, lob: bool, tuning: Dictionary) -> PackedVector3Array:
+	var fl := launch(p0, yaw, charge, lob, tuning)
+	var pts := PackedVector3Array()
+	var n: int = int(tuning["throw"]["arc_points"])
+	for i in n + 1:
+		pts.append(position_at(p0, fl, tuning["throw"]["gravity"], fl["T"] * i / float(n)))
+	return pts
+
+
 ## Where the ball would land for a given charge, for the aim marker.
 static func target_for(pos: Vector2, yaw: float, charge: float, tuning: Dictionary) -> Vector2:
 	var t: Dictionary = tuning["throw"]

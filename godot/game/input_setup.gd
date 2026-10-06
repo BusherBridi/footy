@@ -13,6 +13,7 @@ static func register() -> void:
 	# QB: aim with RMB/LT, throw with LMB/RT while aiming (RT only sprints when not aiming).
 	_action("aim", [_mouse(MOUSE_BUTTON_RIGHT), _axis(JOY_AXIS_TRIGGER_LEFT, 1.0)])
 	_action("throw", [_mouse(MOUSE_BUTTON_LEFT), _axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
+	_action("throw_mode", [_key(KEY_F2)])
 	_action("lob_toggle", [_key(KEY_Q), _button(JOY_BUTTON_RIGHT_SHOULDER)])
 	_action("take_ball", [_key(KEY_E), _button(JOY_BUTTON_BACK)])   # temporary stand-in for the snap
 	_action("cycle_camera", [_key(KEY_C), _button(JOY_BUTTON_LEFT_STICK)])

@@ -14,6 +14,8 @@ var ip_edit := LineEdit.new()
 var status := Label.new()
 var args := {}
 var lob := false
+var throw_mode := NetSession.ThrowMode.AIM
+var _throw_latch := false
 var _take_latch := false
 
 
@@ -36,6 +38,7 @@ func _ready() -> void:
 	if args.has("bot") or args.has("route") or args.has("qb"):
 		brain = BotBrain.new()
 		brain.is_qb = args.has("qb")
+		brain.aim_mode = args.has("aimmode")
 		if args.has("route"):
 			brain.route_name = "" if args["route"] is bool else String(args["route"])
 			if brain.route_name == "":
@@ -97,6 +100,8 @@ func _provide_input() -> Dictionary:
 	var aiming := Input.is_action_pressed("aim")
 	var take := _take_latch
 	_take_latch = false
+	var tap := _throw_latch
+	_throw_latch = false
 	return {
 		"move": camera.world_move(stick),
 		"sprint": Input.is_action_pressed("sprint") or (Input.is_action_pressed("sprint_trigger") and not aiming),
@@ -104,6 +109,9 @@ func _provide_input() -> Dictionary:
 		"throw": aiming and Input.is_action_pressed("throw"),
 		"yaw": camera.yaw,
 		"lob": lob,
+		"mode": throw_mode,
+		"pitch": camera.pitch,
+		"throw_tap": tap and aiming,
 		"take": take,
 	}
 
@@ -163,6 +171,10 @@ func _physics_process(_delta: float) -> void:
 		session.host_add_bot()
 	if Input.is_action_just_pressed("clear_bots"):
 		session.host_clear_bots()
+	if Input.is_action_just_pressed("throw_mode"):
+		throw_mode = NetSession.ThrowMode.HOLD if throw_mode == NetSession.ThrowMode.AIM else NetSession.ThrowMode.AIM
+	if Input.is_action_just_pressed("throw"):
+		_throw_latch = true
 	if Input.is_action_just_pressed("lob_toggle"):
 		lob = not lob
 	if Input.is_action_just_pressed("take_ball"):
@@ -173,8 +185,10 @@ func _physics_process(_delta: float) -> void:
 
 func _process(_delta: float) -> void:
 	camera.set_qb(session.local_has_ball())
+	camera.set_aiming(session.aim_active)
 	var s := session.local_state()
 	var n := Tuning.section("net")
+	var n_throw := Tuning.section("throw")
 	var role := "offline"
 	if session.mode == NetSession.Mode.HOST:
 		role = "HOST"
@@ -183,8 +197,9 @@ func _process(_delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   throw mode: %s   range %d m   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim (look up = further), LMB/RT tap to throw, Q/RB bullet-lob, C camera, F2 throw mode" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "LOB" if lob else "BULLET",
-		int(session.throw_charge * 100.0), camera.profile_name()]
+		"AIM (look up = further, tap)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge)",
+		int(lerpf(n_throw["min_range"], n_throw["max_range"], session.throw_charge)), camera.profile_name()]
