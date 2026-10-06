@@ -1,7 +1,8 @@
 extends Node3D
 ## Entry point: builds the placeholder world, then hosts or joins a match.
 ## Command line (after `--`): --host, --join=IP, --port=N, --bot, --log,
-## --lat=MS, --loss=PCT for fake lag.
+## --lat=MS, --loss=PCT for fake lag. Bots: --bot (wander), --route[=go|out|in|curl|post]
+## (receiver), --qb (takes the ball and throws; combine with --bot or --route).
 
 var field := Field.new()
 var camera := ChaseCamera.new()
@@ -12,6 +13,8 @@ var menu := VBoxContainer.new()
 var ip_edit := LineEdit.new()
 var status := Label.new()
 var args := {}
+var lob := false
+var _take_latch := false
 
 
 func _ready() -> void:
@@ -28,8 +31,13 @@ func _ready() -> void:
 	session.name = "NetSession"
 	add_child(session)
 
-	if args.has("bot"):
+	if args.has("bot") or args.has("route") or args.has("qb"):
 		brain = BotBrain.new()
+		brain.is_qb = args.has("qb")
+		if args.has("route"):
+			brain.route_name = "" if args["route"] is bool else String(args["route"])
+			if brain.route_name == "":
+				brain.route_name = "random"
 	if args.has("lat"):
 		Tuning.data["net"]["sim_latency_ms"] = float(args["lat"])
 	if args.has("loss"):
@@ -73,16 +81,27 @@ func _on_disconnected() -> void:
 	status.text = "Disconnected."
 	menu.show()
 	camera.target = null
-	if args.has("bot"):
+	if brain:
 		get_tree().quit()
 
 
-func _provide_input() -> Array:
+func _provide_input() -> Dictionary:
 	if brain:
 		var dt := 1.0 / float(Tuning.section("net")["tick_hz"])
-		return brain.think(session.local_state().pos, dt, Tuning.section("field"))
+		return brain.think(session.local_state().pos, dt, Tuning.data, session.local_has_ball())
 	var stick := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	return [camera.world_move(stick), Input.is_action_pressed("sprint")]
+	var aiming := Input.is_action_pressed("aim")
+	var take := _take_latch
+	_take_latch = false
+	return {
+		"move": camera.world_move(stick),
+		"sprint": Input.is_action_pressed("sprint") or (Input.is_action_pressed("sprint_trigger") and not aiming),
+		"aiming": aiming,
+		"throw": aiming and Input.is_action_pressed("throw"),
+		"yaw": camera.yaw,
+		"lob": lob,
+		"take": take,
+	}
 
 
 func _build_world() -> void:
@@ -136,9 +155,16 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
+	if Input.is_action_just_pressed("lob_toggle"):
+		lob = not lob
+	if Input.is_action_just_pressed("take_ball"):
+		_take_latch = true
+	if Input.is_action_just_pressed("cycle_camera"):
+		camera.cycle_style()
 
 
 func _process(_delta: float) -> void:
+	camera.set_qb(session.local_has_ball())
 	var s := session.local_state()
 	var n := Tuning.section("net")
 	var role := "offline"
@@ -146,6 +172,8 @@ func _process(_delta: float) -> void:
 		role = "HOST"
 	elif session.mode == NetSession.Mode.CLIENT:
 		role = "CLIENT rtt %d ms, correction %.2f m" % [int(session.rtt * 1000.0), session.last_correction]
-	hud.text = "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning" % [
+	hud.text = "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   charge %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nE take ball (temp snap), hold RMB/LT aim, LMB/RT throw (hold for power), Q/RB bullet-lob, C camera mode" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
-		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-"]
+		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
+		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "LOB" if lob else "BULLET",
+		int(session.throw_charge * 100.0), camera.profile_name()]

@@ -21,6 +21,8 @@ class SvPlayer:
 	var last_move := Vector2.ZERO
 	var last_sprint := false
 
+enum Ball { LOOSE, HELD, FLIGHT }
+
 const SNAP_STRIDE := 11   # floats per player (id travels in a separate int array)
 
 var mode := Mode.NONE
@@ -34,6 +36,26 @@ var log_enabled := false
 var sv_players := {}                  # peer id -> SvPlayer
 var sv_tick := 0
 var _sv_next_spawn := 0
+
+# Ball (server truth; clients read it from snapshots)
+var ball_kind := Ball.LOOSE
+var ball_holder := 0
+var ball_launch_tick := 0
+var ball_p0 := Vector3.ZERO
+var ball_yaw := 0.0
+var ball_charge := 0.0
+var ball_lob := false
+var ball_loose := Vector3(0, 0.3, 0)
+var ball_view: BallView = null
+
+# Local throw control
+var throw_charge := 0.0
+var throw_charging := false
+var aim_active := false
+var aim_pos := Vector2.ZERO
+var aim_lob := false
+var latest_holder := 0         # newest holder seen in a snapshot (undelayed)
+var view_ball := {}            # what the delayed view currently shows (for logs/HUD)
 
 # Client side
 var cl_state: AthleteState = null
@@ -80,6 +102,7 @@ func start_host(port: int) -> Error:
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	mode = Mode.HOST
+	_make_ball_view()
 	local_id = 1
 	_add_sv_player(1)
 	_ensure_athlete(1)
@@ -96,7 +119,14 @@ func start_client(ip: String, port: int) -> Error:
 	multiplayer.connection_failed.connect(_on_lost)
 	multiplayer.server_disconnected.connect(_on_lost)
 	mode = Mode.CLIENT
+	_make_ball_view()
 	return OK
+
+
+func _make_ball_view() -> void:
+	if ball_view == null:
+		ball_view = BallView.new()
+		athlete_parent.add_child(ball_view)
 
 
 func _on_connected() -> void:
@@ -110,6 +140,9 @@ func _on_lost() -> void:
 	for a in athletes.values():
 		a.queue_free()
 	athletes.clear()
+	if ball_view:
+		ball_view.queue_free()
+		ball_view = null
 	disconnected.emit()
 
 
@@ -148,15 +181,18 @@ func _physics_process(delta: float) -> void:
 			_client_tick(dt)
 
 
-func _sample_input() -> Array:
-	return input_provider.call() if input_provider.is_valid() else [Vector2.ZERO, false]
+func _sample_input() -> Dictionary:
+	if input_provider.is_valid():
+		return input_provider.call()
+	return {"move": Vector2.ZERO, "sprint": false}
 
 
 func _host_tick(dt: float) -> void:
 	var inp := _sample_input()
+	_ball_input(inp, dt)
 	var me: SvPlayer = sv_players[1]
 	me.last_seq += 1
-	me.queue.append([me.last_seq, inp[0], inp[1]])
+	me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
 
 	var max_q: int = int(_net()["max_input_queue"])
 	for id in sv_players:
@@ -173,6 +209,7 @@ func _host_tick(dt: float) -> void:
 		Movement.step(p.state, p.last_move, p.last_sprint, dt, Tuning.data)
 
 	sv_tick += 1
+	_ball_tick(dt)
 	var ids := PackedInt32Array()
 	var data := PackedFloat32Array()
 	for id in sv_players:
@@ -181,18 +218,22 @@ func _host_tick(dt: float) -> void:
 		ids.append(id)
 		data.append_array([s.pos.x, s.pos.y, s.heading.x, s.heading.y, s.speed, s.stamina,
 			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, p.acked])
+	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
+	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
+		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
 		var tick := sv_tick
-		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_snapshot", tick, ids, data))
+		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_snapshot", tick, ids, data, ball_i, ball_f))
 
 
 func _client_tick(dt: float) -> void:
 	if cl_state == null:
 		return
 	var inp := _sample_input()
-	var move: Vector2 = inp[0]
-	var sprint: bool = inp[1]
+	_ball_input(inp, dt)
+	var move: Vector2 = inp["move"]
+	var sprint: bool = inp["sprint"]
 	cl_seq += 1
 	cl_prev_pos = cl_state.pos
 	Movement.step(cl_state, move, sprint, dt, Tuning.data)
@@ -228,14 +269,15 @@ func rpc_inputs(batch: PackedFloat32Array) -> void:
 
 
 @rpc("authority", "unreliable")
-func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array) -> void:
+func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ball_i: PackedInt32Array, ball_f: PackedFloat32Array) -> void:
 	if mode != Mode.CLIENT or tick <= latest_tick:
 		return
 	var players := {}
 	for i in ids.size():
 		players[ids[i]] = data.slice(i * SNAP_STRIDE, (i + 1) * SNAP_STRIDE)
 	latest_tick = tick
-	snap_buffer.append({"tick": tick, "players": players})
+	snap_buffer.append({"tick": tick, "players": players, "ball_i": ball_i, "ball_f": ball_f})
+	latest_holder = ball_i[1] if ball_i[0] == Ball.HELD else 0
 	if snap_buffer.size() == 1:
 		render_tick = tick - float(_net()["interp_delay_ticks"])
 	if players.has(local_id):
@@ -243,6 +285,88 @@ func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array) ->
 	for id in athletes.keys():
 		if not players.has(id):
 			_remove_athlete(id)
+
+
+@rpc("any_peer", "reliable")
+func rpc_take_ball() -> void:
+	if mode == Mode.HOST:
+		_sv_take(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "reliable")
+func rpc_throw(charge: float, yaw: float, lob: bool) -> void:
+	if mode == Mode.HOST:
+		_sv_throw(multiplayer.get_remote_sender_id(), charge, yaw, lob)
+
+
+# ------------------------------------------------------------------------ ball
+
+## Temporary stand-in for the snap: the ball jumps into this player's hands.
+func _sv_take(id: int) -> void:
+	if not sv_players.has(id):
+		return
+	ball_kind = Ball.HELD
+	ball_holder = id
+
+
+func _sv_throw(id: int, charge: float, yaw: float, lob: bool) -> void:
+	if ball_kind != Ball.HELD or ball_holder != id or not sv_players.has(id):
+		return
+	var pos: Vector2 = sv_players[id].state.pos
+	ball_p0 = Vector3(pos.x, float(Tuning.section("throw")["release_height"]), pos.y)
+	ball_yaw = yaw
+	ball_charge = clampf(charge, 0.0, 1.0)
+	ball_lob = lob
+	ball_launch_tick = sv_tick
+	ball_kind = Ball.FLIGHT
+	ball_holder = 0
+
+
+func _ball_tick(dt: float) -> void:
+	if ball_kind != Ball.FLIGHT:
+		return
+	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data)
+	if (sv_tick - ball_launch_tick) * dt >= float(fl["T"]):
+		ball_kind = Ball.LOOSE
+		ball_loose = fl["land"]
+
+
+func local_has_ball() -> bool:
+	if mode == Mode.HOST:
+		return ball_kind == Ball.HELD and ball_holder == 1
+	return mode == Mode.CLIENT and latest_holder == local_id and local_id != 0
+
+
+## Aim, charge and release. Runs once per tick on whoever is playing locally.
+func _ball_input(inp: Dictionary, dt: float) -> void:
+	if inp.get("take", false):
+		if mode == Mode.HOST:
+			_sv_take(1)
+		else:
+			_send(func(): if cl_connected: rpc_id(1, "rpc_take_ball"))
+
+	var aiming: bool = inp.get("aiming", false) and local_has_ball()
+	var yaw: float = inp.get("yaw", 0.0)
+	var lob: bool = inp.get("lob", false)
+	var holding: bool = aiming and inp.get("throw", false)
+	if holding:
+		throw_charge = minf(1.0, throw_charge + dt / float(Tuning.section("throw")["charge_time"]))
+		throw_charging = true
+	elif throw_charging:
+		if aiming:
+			if mode == Mode.HOST:
+				_sv_throw(1, throw_charge, yaw, lob)
+			else:
+				var c := throw_charge
+				_send(func(): if cl_connected: rpc_id(1, "rpc_throw", c, yaw, lob))
+		throw_charge = 0.0
+		throw_charging = false
+	elif not aiming:
+		throw_charge = 0.0
+	aim_active = aiming
+	aim_lob = lob
+	if aiming:
+		aim_pos = BallFlight.target_for(local_state().pos, yaw, throw_charge, Tuning.data)
 
 
 # -------------------------------------------------------------- reconciliation
@@ -317,14 +441,16 @@ func _process(delta: float) -> void:
 		_update_host_visuals()
 	elif mode == Mode.CLIENT and cl_state != null:
 		_update_client_visuals(delta)
+	if ball_view:
+		ball_view.set_aim(aim_active, aim_pos, aim_lob, float(Tuning.section("throw")["marker_radius"]))
 
 	if log_enabled and mode != Mode.NONE:
 		_log_timer += delta
 		if _log_timer >= 1.0:
 			_log_timer = 0.0
 			var st := local_state()
-			print("[%s id=%d] players=%d rtt=%dms corr_last=%.3f corr_max=%.3f pos=(%.1f,%.1f) speed=%.1f" % [
-				"host" if mode == Mode.HOST else "client", local_id, athletes.size(), int(rtt * 1000.0),
+			print("[%s id=%d] ball=%s players=%d rtt=%dms corr_last=%.3f corr_max=%.3f pos=(%.1f,%.1f) speed=%.1f" % [
+				"host" if mode == Mode.HOST else "client", local_id, ["loose", "held", "flight"][int(view_ball.get("kind", 0))], athletes.size(), int(rtt * 1000.0),
 				last_correction, max_correction, st.pos.x, st.pos.y, st.speed])
 			max_correction = 0.0
 
@@ -344,6 +470,8 @@ func _update_host_visuals() -> void:
 	for id in sv_players:
 		var p: SvPlayer = sv_players[id]
 		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading)
+	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
+		ball_loose, sv_tick + a)
 
 
 func _update_client_visuals(delta: float) -> void:
@@ -382,6 +510,33 @@ func _update_client_visuals(delta: float) -> void:
 			pos = Vector2(a[0], a[1]).lerp(pos, t)
 			heading = ah.slerp(heading, t) if ah.dot(heading) > -0.99 else heading
 		_ensure_athlete(id).set_visual(pos, heading)
+
+	var bi: PackedInt32Array = s0["ball_i"]
+	var bf: PackedFloat32Array = s0["ball_f"]
+	_show_ball(bi[0], bi[1], bi[2], Vector3(bf[0], bf[1], bf[2]), bf[3], bf[4], bf[5] > 0.5,
+		Vector3(bf[6], bf[7], bf[8]), render_tick)
+
+
+func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: float, charge: float,
+		lob: bool, loose: Vector3, tick_f: float) -> void:
+	var th := Tuning.section("throw")
+	var pos := loose
+	var landing_on := false
+	var land := Vector3.ZERO
+	if kind == Ball.HELD and athletes.has(holder):
+		pos = athletes[holder].position + Vector3(0, float(th["held_height"]), 0)
+	elif kind == Ball.FLIGHT:
+		var fl := BallFlight.launch(p0, yaw, charge, lob, Tuning.data)
+		pos = BallFlight.position_at(p0, fl, float(th["gravity"]), (tick_f - launch_tick) * _tick_dt())
+		landing_on = true
+		land = fl["land"]
+	if log_enabled and view_ball.get("kind", -1) != kind:
+		print("[id=%d] ball -> %s%s" % [local_id, ["loose", "held", "flight"][kind],
+			(" land=(%.1f, %.1f) lob=%s" % [land.x, land.z, lob]) if landing_on else ""])
+	view_ball = {"kind": kind, "holder": holder}
+	if ball_view:
+		ball_view.set_ball(pos)
+		ball_view.set_landing(landing_on, land, float(th["marker_radius"]))
 
 
 func _ensure_athlete(id: int) -> Athlete:

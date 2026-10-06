@@ -1,20 +1,49 @@
 class_name BotBrain
 extends RefCounted
-## Dev-only test driver: wanders the field with random sprints and sharp turns.
-## It feeds the normal input path, so a bot is just a client with no human.
+## Dev-only test driver. It feeds the normal input path, so a bot is just a
+## client with no human. Modes:
+##   wander  random walk with sprints and sharp turns
+##   route   runs a receiver route from where it spawned, rests, jogs back, repeats
+## With is_qb it also takes the ball and throws downfield now and then.
 
+var is_qb := false
+var route_name := ""            # empty = wander
 var target := Vector2.ZERO
 var timer := 0.0
 var sprint := false
 var rng := RandomNumberGenerator.new()
+
+var _origin := Vector2.ZERO
+var _have_origin := false
+var _wp: Array = []             # absolute waypoints
+var _wp_i := 0
+var _rest := 0.0
+var _returning := false
+
+var _take_cd := 0.0
+var _throw_wait := 2.0
+var _phase := 0                 # 0 wait, 1 charging, 2 release
+var _charge_left := 0.0
+var _yaw := 0.0
+var _lob := false
 
 
 func _init() -> void:
 	rng.randomize()
 
 
-## Returns [world-plane move Vector2, sprint bool].
-func think(pos: Vector2, dt: float, field: Dictionary) -> Array:
+func think(pos: Vector2, dt: float, tuning: Dictionary, has_ball: bool) -> Dictionary:
+	var out := {"move": Vector2.ZERO, "sprint": false}
+	if route_name != "":
+		_route(out, pos, dt, tuning)
+	else:
+		_wander(out, pos, dt, tuning["field"])
+	if is_qb:
+		_qb(out, dt, tuning, has_ball)
+	return out
+
+
+func _wander(out: Dictionary, pos: Vector2, dt: float, field: Dictionary) -> void:
 	timer -= dt
 	var to := target - pos
 	if timer <= 0.0 or to.length() < 2.0:
@@ -25,4 +54,70 @@ func think(pos: Vector2, dt: float, field: Dictionary) -> Array:
 		timer = rng.randf_range(1.5, 4.0)
 		sprint = rng.randf() < 0.5
 		to = target - pos
-	return [to.normalized(), sprint and to.length() > 6.0]
+	out["move"] = to.normalized()
+	out["sprint"] = sprint and to.length() > 6.0
+
+
+func _route(out: Dictionary, pos: Vector2, dt: float, tuning: Dictionary) -> void:
+	if not _have_origin:
+		_have_origin = true
+		_origin = pos
+		var yard: float = tuning["field"]["yard_m"]
+		var routes: Dictionary = tuning["bot"]["routes_yards"]
+		if not routes.has(route_name):
+			route_name = routes.keys()[rng.randi() % routes.size()]
+		_wp.clear()
+		for p in routes[route_name]:
+			_wp.append(_origin + Vector2(p[0], p[1]) * yard)
+		_wp_i = 0
+	if _rest > 0.0:
+		_rest -= dt
+		return
+	var goal: Vector2 = _origin if _returning else _wp[_wp_i]
+	var to := goal - pos
+	if to.length() < 1.5:
+		if _returning:
+			_returning = false
+			_wp_i = 0
+			_rest = float(tuning["bot"]["route_rest_seconds"])
+		elif _wp_i < _wp.size() - 1:
+			_wp_i += 1
+		else:
+			_returning = true
+		return
+	out["move"] = to.normalized()
+	out["sprint"] = not _returning
+
+
+func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void:
+	_take_cd -= dt
+	if not has_ball:
+		_phase = 0
+		if _take_cd <= 0.0:
+			out["take"] = true
+			_take_cd = 2.0
+		return
+	match _phase:
+		0:  # wait, then start a throw
+			_throw_wait -= dt
+			if _throw_wait <= 0.0:
+				_phase = 1
+				_charge_left = rng.randf_range(0.3, 1.0) * float(tuning["throw"]["charge_time"])
+				_lob = rng.randf() < 0.5
+				_yaw = rng.randf_range(-0.25, 0.25)   # 0 = straight downfield (-z)
+		1:  # hold aim + throw while charging
+			out["aiming"] = true
+			out["throw"] = true
+			out["yaw"] = _yaw
+			out["lob"] = _lob
+			_charge_left -= dt
+			if _charge_left <= 0.0:
+				_phase = 2
+		2:  # release: aim still held, throw button let go
+			out["aiming"] = true
+			out["throw"] = false
+			out["yaw"] = _yaw
+			out["lob"] = _lob
+			_phase = 0
+			_throw_wait = rng.randf_range(2.0, 4.0)
+			_take_cd = 4.0   # let the ball fly before grabbing it again

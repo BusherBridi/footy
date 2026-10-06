@@ -33,7 +33,20 @@
     "pitch_max_deg": 10.0,
     "mouse_sensitivity": 0.003,
     "stick_sensitivity_deg": 150.0,
-    "follow_smoothing": 14.0
+    "follow_smoothing": 14.0,
+    "qb_shoulder": {
+      "distance": 3.5,
+      "height": 2.0,
+      "pitch_deg": -12.0,
+      "shoulder": 0.9
+    },
+    "qb_high": {
+      "distance": 11.0,
+      "height": 5.0,
+      "pitch_deg": -35.0,
+      "shoulder": 0.0
+    },
+    "profile_smoothing": 8.0
   },
   "net": {
     "port": 7777,
@@ -47,5 +60,69 @@
     "sim_latency_ms": 0,
     "sim_jitter_ms": 0,
     "sim_loss_pct": 0
+  },
+  "throw": {
+    "min_range": 6.0,
+    "max_range": 50.0,
+    "charge_time": 1.2,
+    "release_height": 1.8,
+    "gravity": 20.0,
+    "bullet_speed": 30.0,
+    "lob_speed": 17.0,
+    "min_flight_time": 0.25,
+    "ball_radius": 0.3,
+    "held_height": 1.2,
+    "marker_radius": 1.0
+  },
+  "bot": {
+    "routes_yards": {
+      "go": [
+        [
+          0,
+          -30
+        ]
+      ],
+      "out": [
+        [
+          0,
+          -10
+        ],
+        [
+          10,
+          -10
+        ]
+      ],
+      "in": [
+        [
+          0,
+          -10
+        ],
+        [
+          -10,
+          -10
+        ]
+      ],
+      "curl": [
+        [
+          0,
+          -12
+        ],
+        [
+          0,
+          -9
+        ]
+      ],
+      "post": [
+        [
+          0,
+          -10
+        ],
+        [
+          8,
+          -25
+        ]
+      ]
+    },
+    "route_rest_seconds": 3.0
   }
 }
