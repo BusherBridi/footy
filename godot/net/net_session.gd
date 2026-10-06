@@ -48,6 +48,7 @@ var ball_p0 := Vector3.ZERO
 var ball_yaw := 0.0
 var ball_charge := 0.0
 var ball_lob := false
+var ball_thrower := 0
 var ball_loose := Vector3(0, 0.3, 0)
 var ball_view: BallView = null
 
@@ -348,6 +349,7 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool) -> void:
 	ball_charge = clampf(charge, 0.0, 1.0)
 	ball_lob = lob
 	ball_launch_tick = sv_tick
+	ball_thrower = id
 	ball_kind = Ball.FLIGHT
 	ball_holder = 0
 
@@ -356,9 +358,42 @@ func _ball_tick(dt: float) -> void:
 	if ball_kind != Ball.FLIGHT:
 		return
 	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data)
-	if (sv_tick - ball_launch_tick) * dt >= float(fl["T"]):
+	var c: Dictionary = Tuning.section("catch")
+	var g: float = Tuning.section("throw")["gravity"]
+	var t_now := (sv_tick - ball_launch_tick) * dt
+	# Check three points along this tick so a fast ball can't skip through a zone.
+	for k in 3:
+		var ts := minf(maxf(0.0, t_now - dt * (2 - k) / 3.0), float(fl["T"]))
+		var bpos := BallFlight.position_at(ball_p0, fl, g, ts)
+		var cands: Array = []
+		for id in sv_players:
+			if id == ball_thrower and ts < float(c["thrower_grace"]):
+				continue
+			var p: SvPlayer = sv_players[id]
+			var d := CatchRules.zone_distance(p.state.pos, p.state.speed, bpos, Tuning.data)
+			if d >= 0.0:
+				cands.append([d, id])
+		if cands.is_empty():
+			continue
+		cands.sort()
+		if cands.size() > 1 and cands[1][0] - cands[0][0] <= float(c["tie_margin"]):
+			ball_kind = Ball.LOOSE      # contested tie: incomplete
+			ball_loose = Vector3(bpos.x, float(Tuning.section("throw")["ball_radius"]), bpos.z)
+			_log_event("incomplete: tie between %d and %d" % [cands[0][1], cands[1][1]])
+		else:
+			ball_kind = Ball.HELD
+			ball_holder = cands[0][1]
+			_log_event("catch by %d (%.2f m from the ball, %d in range)" % [ball_holder, cands[0][0], cands.size()])
+		return
+	if t_now >= float(fl["T"]):
 		ball_kind = Ball.LOOSE
 		ball_loose = fl["land"]
+		_log_event("incomplete: ball hit the ground")
+
+
+func _log_event(line: String) -> void:
+	if log_enabled:
+		_log("[server] " + line)
 
 
 func local_has_ball() -> bool:
@@ -524,7 +559,7 @@ func _update_host_visuals() -> void:
 	var a := _alpha()
 	for id in sv_players:
 		var p: SvPlayer = sv_players[id]
-		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading)
+		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, sv_tick + a)
 
@@ -532,7 +567,7 @@ func _update_host_visuals() -> void:
 func _update_client_visuals(delta: float) -> void:
 	correction *= exp(-float(_net()["correction_decay"]) * delta)
 	var me := _ensure_athlete(local_id)
-	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading)
+	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed)
 
 	if latest_tick < 0:
 		return
@@ -559,12 +594,14 @@ func _update_client_visuals(delta: float) -> void:
 		var b: PackedFloat32Array = s1["players"][id]
 		var pos := Vector2(b[0], b[1])
 		var heading := Vector2(b[2], b[3])
+		var spd: float = b[4]
 		if s0["players"].has(id):
 			var a: PackedFloat32Array = s0["players"][id]
 			var ah := Vector2(a[2], a[3])
 			pos = Vector2(a[0], a[1]).lerp(pos, t)
 			heading = ah.slerp(heading, t) if ah.dot(heading) > -0.99 else heading
-		_ensure_athlete(id).set_visual(pos, heading)
+			spd = lerpf(a[4], spd, t)
+		_ensure_athlete(id).set_visual(pos, heading, spd)
 
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]
