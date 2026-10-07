@@ -34,6 +34,12 @@ func _ready():
 	print("%-46s %s" % ["stiff arm twice (cooldown)", stiff_twice()])
 	print("%-46s %s" % ["dive hits the carrier (2.5 m, head-on)", dive(Vector2(0, -2.5), Vector2(0, 1), true)])
 	print("%-46s %s" % ["dive misses (carrier 8 m away)", dive(Vector2(0, -8.0), Vector2(0, 1), false)])
+	print()
+	print("%-46s %s" % ["juke cases", "result"])
+	print("%-46s %s" % ["hard flick at run speed", flick(1.0)])
+	print("%-46s %s" % ["hard flick with nearly empty stamina", flick(0.05)])
+	print("%-46s %s" % ["dive at a carrier whose juke is live", dive(Vector2(0, -2.5), Vector2(0, 1), false, 0.3)])
+	print("%-46s %s" % ["close tackle while juke is live (weak)", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, false, 0.3)])
 	get_tree().quit()
 
 
@@ -51,8 +57,9 @@ func reset(tp: Vector2, th: Vector2, tspeed: float, cspeed: float) -> void:
 	s.ball_holder = 2
 
 
-func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, timed: bool) -> String:
+func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, timed: bool, juke := 0.0) -> String:
 	reset(tp, th, tspeed, cspeed)
+	s.sv_players[2].state.juke_timer = juke
 	var c: AthleteState = s.sv_players[2].state
 	c.stamina = stamina
 	s._sv_stiffarm(2)
@@ -73,8 +80,9 @@ func stiff_twice() -> String:
 	return "stamina spent after press 1: %.2f, after press 2: %.2f (second ignored: %s)" % [cost1, cost2, is_equal_approx(cost1, cost2)]
 
 
-func dive(tp: Vector2, th: Vector2, hits: bool) -> String:
+func dive(tp: Vector2, th: Vector2, hits: bool, juke := 0.0) -> String:
 	reset(tp, th, 7.0, 0.0)     # carrier standing still so the dive can reach
+	s.sv_players[2].state.juke_timer = juke
 	var d: AthleteState = s.sv_players[3].state
 	var c: AthleteState = s.sv_players[2].state
 	s._sv_dive(3)
@@ -115,3 +123,13 @@ func t(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, twice := false) -
 	var res: String = out[0] if out.size() > 0 else "(no event)"
 	var carrier_state: String = ["ok", "stumble", "down", "diving"][c.status]
 	return "%s -> carrier %s, ball %s" % [res, carrier_state, ["loose", "held", "flight"][s.ball_kind]]
+
+
+func flick(stamina: float) -> String:
+	var a := AthleteState.new()
+	a.speed = 7.0
+	a.heading = Vector2(0, -1)
+	a.prev_dir = Vector2(0, -1)
+	a.stamina = stamina
+	Movement.step(a, Vector2(1, 0), false, 1.0 / 30.0, Tuning.data)
+	return "cut=%s speed %.1f juke window %.2fs stamina %.2f" % [a.cut_timer > 0.0, a.speed, a.juke_timer, a.stamina]

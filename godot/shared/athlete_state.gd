@@ -14,6 +14,7 @@ var cut_cooldown := 0.0
 var prev_dir := Vector2.ZERO     # last frame's stick direction, for flick detection
 var status := Status.OK          # set by the referee (tackles); movement just obeys it
 var status_timer := 0.0
+var juke_timer := 0.0            # >0 while a juke is "live": dives pass through, close tackles hit harder
 
 
 func copy() -> AthleteState:
@@ -27,4 +28,5 @@ func copy() -> AthleteState:
 	s.prev_dir = prev_dir
 	s.status = status
 	s.status_timer = status_timer
+	s.juke_timer = juke_timer
 	return s

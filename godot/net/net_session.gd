@@ -27,12 +27,13 @@ class SvPlayer:
 	var stiff_cd := 0.0
 	var stiff_weak := false      # fired with too little stamina
 	var fx := 0                  # visual cue: 1 = stiff arm out
+	var dodged := false          # this dive was already juked past (announce once)
 	var fx_timer := 0.0
 
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
 
-const SNAP_STRIDE := 14   # floats per player (id travels in a separate int array)
+const SNAP_STRIDE := 15   # floats per player (id travels in a separate int array)
 
 var mode := Mode.NONE
 var local_id := 0
@@ -285,7 +286,7 @@ func _host_tick(dt: float) -> void:
 		var s := p.state
 		ids.append(id)
 		data.append_array([s.pos.x, s.pos.y, s.heading.x, s.heading.y, s.speed, s.stamina,
-			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, p.fx, p.acked])
+			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, s.juke_timer, p.fx, p.acked])
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
@@ -447,6 +448,10 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var balance: float = weight * (float(tk["balance_base"]) + c.speed * balance_factor)
 	var cp: SvPlayer = sv_players[carrier_id]
 	var counter_note := ""
+	if not dive and c.juke_timer > 0.0:
+		# A juke is weak against a close tackle: the plant leaves you off balance.
+		balance -= float(tk["juke_close_penalty"])
+		counter_note += " - juke %.1f" % float(tk["juke_close_penalty"])
 	if not dive and cp.stiff_timer > 0.0:
 		# A well-timed stiff arm adds balance. Weak against hits from the side or behind,
 		# and weaker still when it was thrown with an empty stamina bar.
@@ -508,6 +513,7 @@ func _sv_dive(id: int) -> void:
 		return
 	var tk: Dictionary = Tuning.section("tackle")
 	p.dive_cd = tk["dive_cooldown"]
+	p.dodged = false
 	p.state.status = AthleteState.Status.DIVING
 	p.state.status_timer = tk["dive_time"]
 	p.state.speed = maxf(p.state.speed * float(tk["dive_speed_mult"]), float(tk["dive_min_speed"]))
@@ -525,6 +531,12 @@ func _check_dives() -> void:
 		if id == ball_holder or p.state.status != AthleteState.Status.DIVING:
 			continue
 		if p.state.pos.distance_to(carrier.state.pos) <= float(tk["dive_hit_radius"]):
+			if carrier.state.juke_timer > 0.0:
+				# A well-timed juke beats a dive: the diver sails through and hits the ground.
+				if not p.dodged:
+					p.dodged = true
+					_announce("JUKED! %s dove past %s" % [_name(id), _name(ball_holder)])
+				continue
 			_resolve_tackle(id, ball_holder, true)
 			return
 
@@ -687,13 +699,14 @@ func _state_from(a: PackedFloat32Array) -> AthleteState:
 	s.prev_dir = Vector2(a[8], a[9])
 	s.status = int(a[10])
 	s.status_timer = a[11]
+	s.juke_timer = a[12]
 	return s
 
 
 func _reconcile(a: PackedFloat32Array) -> void:
 	var s := _state_from(a)
-	var ack := int(a[13])
-	cl_fx = int(a[12])
+	var ack := int(a[14])
+	cl_fx = int(a[13])
 	if cl_state == null:
 		cl_state = s
 		cl_prev_pos = s.pos
@@ -788,7 +801,7 @@ func _update_host_visuals() -> void:
 	var a := _alpha()
 	for id in sv_players:
 		var p: SvPlayer = sv_players[id]
-		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx)
+		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, ball_angle, sv_tick + a)
 
@@ -796,7 +809,7 @@ func _update_host_visuals() -> void:
 func _update_client_visuals(delta: float) -> void:
 	correction *= exp(-float(_net()["correction_decay"]) * delta)
 	var me := _ensure_athlete(local_id)
-	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed, cl_state.status, cl_fx)
+	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed, cl_state.status, cl_fx, cl_state.juke_timer > 0.0)
 
 	if latest_tick < 0:
 		return
@@ -825,14 +838,15 @@ func _update_client_visuals(delta: float) -> void:
 		var heading := Vector2(b[2], b[3])
 		var spd: float = b[4]
 		var st := int(b[10])
-		var fx := int(b[12])
+		var fx := int(b[13])
+		var jk: bool = b[12] > 0.0
 		if s0["players"].has(id):
 			var a: PackedFloat32Array = s0["players"][id]
 			var ah := Vector2(a[2], a[3])
 			pos = Vector2(a[0], a[1]).lerp(pos, t)
 			heading = ah.slerp(heading, t) if ah.dot(heading) > -0.99 else heading
 			spd = lerpf(a[4], spd, t)
-		_ensure_athlete(id).set_visual(pos, heading, spd, st, fx)
+		_ensure_athlete(id).set_visual(pos, heading, spd, st, fx, jk)
 
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]

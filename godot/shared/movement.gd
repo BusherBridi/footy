@@ -11,6 +11,7 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	var run_speed: float = m["run_speed"]
 
 	s.cut_cooldown = maxf(0.0, s.cut_cooldown - dt)
+	s.juke_timer = maxf(0.0, s.juke_timer - dt)
 
 	# Referee-imposed states: stumbling is slow and clumsy, being down means no control.
 	if s.status != AthleteState.Status.OK:
@@ -45,6 +46,12 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 			s.speed *= m["cut_speed_keep"]
 			s.cut_timer = m["cut_plant_time"]
 			s.cut_cooldown = m["cut_cooldown"]
+			# A juke costs stamina. With too little left the cut still happens, but it
+			# no longer fools anyone (no juke window).
+			var cost: float = m["cut_stamina_cost"]
+			if s.stamina >= cost:
+				s.juke_timer = m["juke_window"]
+			s.stamina = maxf(0.0, s.stamina - cost)
 	s.prev_dir = want
 
 	if s.cut_timer > 0.0:

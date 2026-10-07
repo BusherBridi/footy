@@ -55,7 +55,7 @@ func set_color(c: Color) -> void:
 	_body_mat.albedo_color = c
 
 
-func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0) -> void:
+func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false) -> void:
 	_arm.visible = fx == 1
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
@@ -70,4 +70,4 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		tilt = -1.15
 	elif status == AthleteState.Status.STUMBLE:
 		tilt = -0.35
-	rotation = Vector3(tilt, atan2(-heading.x, -heading.y), 0.0)
+	rotation = Vector3(tilt, atan2(-heading.x, -heading.y), 0.35 if juke else 0.0)
