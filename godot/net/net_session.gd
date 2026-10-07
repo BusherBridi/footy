@@ -249,7 +249,7 @@ func _host_tick(dt: float) -> void:
 			q.fx = 0
 	for id in sv_bots:
 		var bp: SvPlayer = sv_players[id]
-		var ctx := {}
+		var ctx := {"heading": bp.state.heading}
 		if ball_kind == Ball.HELD and ball_holder != id and sv_players.has(ball_holder):
 			var cs: AthleteState = sv_players[ball_holder].state
 			ctx["carrier"] = cs.pos

@@ -139,7 +139,8 @@
     "chase_trigger_m": 1.4,
     "chase_lead_s": 0.25,
     "dive_trigger_m": 3.2,
-    "dive_chance": 0.5
+    "dive_chance": 0.5,
+    "chase_face_deg": 60.0
   },
   "catch": {
     "radius": 1.2,

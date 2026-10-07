@@ -54,11 +54,18 @@ func _chase(out: Dictionary, pos: Vector2, tuning: Dictionary, ctx: Dictionary) 
 		return
 	var cp: Vector2 = ctx["carrier"]
 	var cv: Vector2 = ctx.get("carrier_vel", Vector2.ZERO)
-	var aim := cp + cv * float(tuning["bot"]["chase_lead_s"])
+	var dist := pos.distance_to(cp)
+	# Lead the carrier, but ease the lead off as we close in so the aim point can never
+	# end up behind us (that made the bot turn around mid-charge and whiff).
+	var lead := float(tuning["bot"]["chase_lead_s"]) * clampf(dist / 6.0, 0.0, 1.0)
+	var aim := cp + cv * lead
 	out["move"] = (aim - pos).normalized()
 	out["sprint"] = true
-	var dist := pos.distance_to(cp)
-	if dist <= float(tuning["bot"]["chase_trigger_m"]):
+	var facing_ok := true
+	if ctx.has("heading"):
+		var h: Vector2 = ctx["heading"]
+		facing_ok = rad_to_deg(absf(h.angle_to(cp - pos))) <= float(tuning["bot"]["chase_face_deg"])
+	if dist <= float(tuning["bot"]["chase_trigger_m"]) and facing_ok:
 		out["tackle"] = true
 	elif dist > float(tuning["bot"]["dive_trigger_m"]) + 2.0:
 		_dive_roll = -1
