@@ -36,6 +36,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	var diving := s.status == AthleteState.Status.DIVING
 	var spinning := s.status == AthleteState.Status.SPIN
 	var popping := s.status == AthleteState.Status.POP
+	var wrapped := s.status == AthleteState.Status.WRAPPED
+	var holding := s.status == AthleteState.Status.HOLDING
 	if spinning and mag >= float(m["spin_side_input"]):
 		# Hold left or right of your running direction to choose the pop side.
 		var side := s.heading.cross(want)
@@ -52,6 +54,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 		top *= m["stumble_speed_mult"]
 	elif s.status == AthleteState.Status.TRUCK:
 		top *= m["truck_speed_mult"]
+	elif wrapped:
+		top *= m["wrap_speed_mult"]
 
 	# Cut: a hard stick flick makes a brief plant that keeps part of your speed.
 	if m["cut_enabled"] and s.status == AthleteState.Status.OK and s.cut_timer <= 0.0 and s.cut_cooldown <= 0.0 \
@@ -74,13 +78,16 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if s.cut_timer > 0.0:
 		# Planted: no turning or acceleration for the plant duration.
 		s.cut_timer = maxf(0.0, s.cut_timer - dt)
-	elif diving or spinning or popping:
+	elif diving or spinning or popping or holding:
 		pass   # committed: heading and speed are locked until the move ends
 	else:
 		_steer_and_accelerate(s, want, mag, top, dt, m, m["down_stop_time"] if down else m["stop_time"])
 
 	# Stamina: sprinting drains, otherwise it refills (faster when standing).
-	if sprinting:
+	if wrapped:
+		# Dragging a defender around burns stamina fast; at zero the carrier goes down.
+		s.stamina = maxf(0.0, s.stamina - dt * float(m["wrap_drain"]))
+	elif sprinting:
 		s.stamina = maxf(0.0, s.stamina - dt / float(m["sprint_seconds"]))
 	else:
 		var regen_s: float = m["stamina_regen_stand_seconds"] if s.speed < 0.5 else m["stamina_regen_jog_seconds"]

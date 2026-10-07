@@ -1,6 +1,7 @@
 extends Node
 ## Referee checks with scripted players. Run headless:
 ##   godot --headless --path godot res://tests/tackle_test.tscn
+const ST := ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle", "pop", "wrapped", "holding"]
 var s: NetSession
 
 
@@ -64,6 +65,19 @@ func _ready():
 	print("%-46s %s" % ["spin, hold LEFT, then pop", spin_pop(Vector2(-1, 0))])
 	print("%-46s %s" % ["spin, no stick, then pop", spin_pop(Vector2.ZERO)])
 	print("%-46s %s" % ["fumble recovered by a nearby player", fumble_recovery()])
+	print()
+	print("%-46s %s" % ["the wrap", "result"])
+	print("%-46s %s" % ["standing tackler vs standing carrier", wrap_first()])
+	print("%-46s %s" % ["side tackle with no speed vs jogging carrier", t(Vector2(1.2, 0), Vector2(-1, 0), 0.0, run)])
+	print("%-46s %s" % ["tether: holder follows a moving carrier", wrap_tether()])
+	print("%-46s %s" % ["second defender joins -> carrier goes down", wrap_join()])
+	print("%-46s %s" % ["stamina runs out -> worn down", wrap_wear()])
+	print("%-46s %s" % ["spin breaks the hold", wrap_break(1)])
+	print("%-46s %s" % ["truck breaks a weak hold", wrap_break(2)])
+	print("%-46s %s" % ["truck fails against a strong hold", wrap_break(3)])
+	print("%-46s %s" % ["stiff arm shoves the holder off", wrap_break(4)])
+	print("%-46s %s" % ["stiff arm with empty stamina fails", wrap_break(5)])
+	print("%-46s %s" % ["holder lets go (presses tackle again)", wrap_break(6)])
 	print("%-46s %s" % ["HURDLE vs a tackler on their feet", cnt(AthleteState.Status.HURDLE, Vector2(0, -1.2), Vector2(0, 1), 0.0, run, 1.0)])
 	print("%-46s %s" % ["HURDLE vs a dive", hurdle_dive()])
 	print("%-46s %s" % ["counter cooldown (spin then truck at once)", counter_cd()])
@@ -99,7 +113,7 @@ func spin_pop(stick: Vector2) -> String:
 	for i in 20:
 		Movement.step(a, stick, false, dt, Tuning.data)
 		if i == 4 or i == 12 or i == 19:
-			trace += " | t=%.2fs %s heading (%.2f, %.2f) speed %.1f" % [(i + 1) * dt, ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle", "pop"][a.status], a.heading.x, a.heading.y, a.speed]
+			trace += " | t=%.2fs %s heading (%.2f, %.2f) speed %.1f" % [(i + 1) * dt, ST[a.status], a.heading.x, a.heading.y, a.speed]
 	return "moved (%.1f, %.1f)%s" % [a.pos.x - start.x, a.pos.y - start.y, trace]
 
 
@@ -171,7 +185,7 @@ func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, 
 	var out: Array = []
 	s.event_text.connect(func(x): out.append(x), CONNECT_ONE_SHOT)
 	s._sv_tackle(3)
-	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]]
+	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ST[c.status]]
 
 
 func stiff_twice() -> String:
@@ -195,8 +209,8 @@ func dive(tp: Vector2, th: Vector2, hits: bool, juke := 0.0) -> String:
 	for i in 60:
 		s._host_tick(1.0 / 30.0)
 		if i == 5 or i == 20 or i == 45:
-			trace += " | t=%.1fs diver %s" % [(i + 1) / 30.0, ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][d.status]]
-	return "%s -> carrier %s%s" % [out[0] if out.size() > 0 else "(no hit)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status], trace]
+			trace += " | t=%.1fs diver %s" % [(i + 1) / 30.0, ST[d.status]]
+	return "%s -> carrier %s%s" % [out[0] if out.size() > 0 else "(no hit)", ST[c.status], trace]
 
 
 ## tp: tackler position relative to carrier, th: tackler heading.
@@ -224,7 +238,7 @@ func t(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, twice := false) -
 		s._sv_tackle(3)
 		return "second press ignored: %s" % (s.sv_players[3].tackle_cd > 0.0 and out.size() == n_before)
 	var res: String = out[0] if out.size() > 0 else "(no event)"
-	var carrier_state: String = ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]
+	var carrier_state: String = ST[c.status]
 	return "%s -> carrier %s, ball %s" % [res, carrier_state, ["loose", "held", "flight"][s.ball_kind]]
 
 
@@ -236,3 +250,89 @@ func flick(stamina: float) -> String:
 	a.stamina = stamina
 	Movement.step(a, Vector2(1, 0), false, 1.0 / 30.0, Tuning.data)
 	return "cut=%s speed %.1f juke window %.2fs stamina %.2f" % [a.cut_timer > 0.0, a.speed, a.juke_timer, a.stamina]
+
+
+func ev_capture() -> Array:
+	var out: Array = []
+	s.event_text.connect(func(x): out.append(x))
+	return out
+
+
+func wrap_start() -> Array:
+	reset(Vector2(0, -1.2), Vector2(0, 1), 0.0, 0.0)
+	s.fumble_roll = 1.0
+	var out := ev_capture()
+	s._sv_tackle(3)
+	return out
+
+
+func wrap_first() -> String:
+	var out := wrap_start()
+	var c: AthleteState = s.sv_players[2].state
+	var h: AthleteState = s.sv_players[3].state
+	return "%s -> carrier %s, holder %s, ball %s" % [str(out[0]).split(" (")[0], ST[c.status], ST[h.status], ["loose", "held", "flight"][s.ball_kind]]
+
+
+func wrap_tether() -> String:
+	reset(Vector2(1.2, 0), Vector2(-1, 0), 0.0, 7.0)       # standing tackler, jogging carrier, from the side
+	s.fumble_roll = 1.0
+	s.sv_players[2].last_move = Vector2(0, -1)              # the carrier keeps trying to run north
+	s._sv_tackle(3)
+	var c: AthleteState = s.sv_players[2].state
+	var h: AthleteState = s.sv_players[3].state
+	var dists: Array = []
+	for i in 30:
+		s._host_tick(1.0 / 30.0)
+		dists.append(h.pos.distance_to(c.pos))
+	return "status %s/%s; carrier ran to (%.1f, %.1f) at speed %.1f (slowed); holder %.2f m away (min %.2f, max %.2f)" % [ST[c.status], ST[h.status], c.pos.x, c.pos.y, c.speed, dists[-1], dists.min(), dists.max()]
+
+
+func wrap_join() -> String:
+	wrap_start()
+	s._add_sv_player(4)
+	s.sv_players[4].state.pos = Vector2(0.8, 0.9)
+	s.sv_players[4].state.heading = Vector2(-0.6, -0.8)
+	s.sv_players[4].state.speed = 0.0
+	var out := ev_capture()
+	s._sv_tackle(4)
+	var c: AthleteState = s.sv_players[2].state
+	return "%s -> carrier %s, holder %s" % [str(out[0]).split(" (")[0], ST[c.status], ST[s.sv_players[3].state.status]]
+
+
+func wrap_wear() -> String:
+	wrap_start()
+	var c: AthleteState = s.sv_players[2].state
+	var out := ev_capture()
+	var n := 0
+	for i in 200:
+		s._host_tick(1.0 / 30.0)
+		n += 1
+		if c.status == AthleteState.Status.DOWN:
+			break
+	return "carrier %s after %.1f s (stamina %.2f); event: %s" % [ST[c.status], n / 30.0, c.stamina, str(out[-1]).split(":")[0]]
+
+
+## 1 spin, 2 truck (weak hold), 3 truck (strong hold), 4 stiff arm, 5 stiff arm (empty), 6 holder releases
+func wrap_break(kind: int) -> String:
+	wrap_start()
+	var c: AthleteState = s.sv_players[2].state
+	var h: AthleteState = s.sv_players[3].state
+	var out := ev_capture()
+	match kind:
+		1:
+			s._sv_counter(2, AthleteState.Status.SPIN)
+		2:
+			s._sv_counter(2, AthleteState.Status.TRUCK)
+		3:
+			s.sv_players[2].wrap_hit = 20.0
+			s._sv_counter(2, AthleteState.Status.TRUCK)
+		4:
+			s._sv_stiffarm(2)
+		5:
+			c.stamina = 0.05
+			s._sv_stiffarm(2)
+		6:
+			h.status_timer = 5.0
+			s.sv_players[3].tackle_cd = 0.0
+			s._sv_tackle(3)
+	return "%s -> carrier %s, holder %s" % [str(out[-1]), ST[c.status], ST[h.status]]

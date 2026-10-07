@@ -34,7 +34,9 @@
     "pop_time": 0.25,
     "pop_speed_mult": 1.1,
     "spin_side_input": 0.35,
-    "spin_side_cross": 0.35
+    "spin_side_cross": 0.35,
+    "wrap_speed_mult": 0.4,
+    "wrap_drain": 0.4
   },
   "camera": {
     "distance": 7.0,
@@ -175,8 +177,6 @@
     "broken_margin": -2.0,
     "down_time": 1.0,
     "down_time_big": 1.5,
-    "drag_min_m": 1.0,
-    "drag_max_m": 2.7,
     "broken_stumble_time": 0.6,
     "broken_speed_keep": 0.7,
     "defender_stumble_time": 0.6,
@@ -214,6 +214,10 @@
     "fumble_pop_speed": 6.0,
     "fumble_friction": 8.0,
     "fumble_pickup_radius": 1.0,
-    "fumble_pickup_delay": 0.4
+    "fumble_pickup_delay": 0.4,
+    "takedown_speed": 4.0,
+    "join_hit_factor": 1.0,
+    "wrap_offset": 0.9,
+    "wrap_max_time": 6.0
   }
 }

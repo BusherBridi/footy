@@ -50,8 +50,8 @@ func think(pos: Vector2, dt: float, tuning: Dictionary, has_ball: bool, ctx := {
 
 
 func _chase(out: Dictionary, pos: Vector2, tuning: Dictionary, ctx: Dictionary) -> void:
-	if not ctx.has("carrier"):
-		return
+	if not ctx.has("carrier") or ctx.get("holding", false):
+		return        # holding the carrier: hang on and wait for a teammate to finish him
 	var cp: Vector2 = ctx["carrier"]
 	var cv: Vector2 = ctx.get("carrier_vel", Vector2.ZERO)
 	var dist := pos.distance_to(cp)

@@ -76,6 +76,10 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		tilt = -0.3
 	elif status == AthleteState.Status.POP:
 		tilt = -0.4
+	elif status == AthleteState.Status.WRAPPED:
+		tilt = -0.15
+	elif status == AthleteState.Status.HOLDING:
+		tilt = -0.45
 	var yaw := atan2(-heading.x, -heading.y)
 	if status == AthleteState.Status.SPIN:
 		yaw += Time.get_ticks_msec() / 60.0     # a visible spin

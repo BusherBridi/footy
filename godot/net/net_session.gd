@@ -24,6 +24,10 @@ class SvPlayer:
 	var tackle_cd := 0.0
 	var dive_cd := 0.0
 	var stiff_timer := 0.0       # >0: a stiff arm is active (the carrier's counter window)
+	var wrap_holder := 0         # carrier side: who has hold of me (0 = nobody)
+	var wrap_hit := 0.0          # hit power of that first tackle; a joiner adds it to theirs
+	var wrap_local := Vector2.ZERO
+	var wrap_of := 0             # holder side: whose carrier I'm holding
 	var counter_cd := 0.0         # shared by every carrier counter
 	var counter_weak := false    # a status counter (spin, truck, hurdle) thrown on an empty bar
 	var stiff_weak := false      # fired with too little stamina
@@ -258,7 +262,7 @@ func _host_tick(dt: float) -> void:
 			q.fx = 0
 	for id in sv_bots:
 		var bp: SvPlayer = sv_players[id]
-		var ctx := {"heading": bp.state.heading}
+		var ctx := {"heading": bp.state.heading, "holding": bp.wrap_of != 0}
 		if ball_kind == Ball.HELD and ball_holder != id and sv_players.has(ball_holder):
 			var cs: AthleteState = sv_players[ball_holder].state
 			ctx["carrier"] = cs.pos
@@ -285,6 +289,7 @@ func _host_tick(dt: float) -> void:
 		# else: starved, repeat the last input
 		Movement.step(p.state, p.last_move, p.last_sprint, dt, Tuning.data)
 
+	_wrap_tick()
 	_check_dives()
 	sv_tick += 1
 	_ball_tick(dt)
@@ -426,6 +431,13 @@ func _sv_tackle(id: int) -> void:
 	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
 		return
 	var tk: Dictionary = Tuning.section("tackle")
+	if p.wrap_of != 0:
+		# Holding a carrier: pressing tackle again lets go.
+		if p.tackle_cd <= 0.0:
+			p.tackle_cd = tk["cooldown"]
+			_end_wrap(p.wrap_of, false)
+			_announce("%s lets go" % _name(id))
+		return
 	if ball_kind == Ball.HELD and ball_holder == id:
 		_sv_stiffarm(id)       # same button: with the ball it's a stiff arm
 		return
@@ -467,8 +479,12 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var balance: float = weight * (float(tk["balance_base"]) + c.speed * balance_factor)
 	var cp: SvPlayer = sv_players[carrier_id]
 	var counter_note := ""
-	var carrier_status: int = c.status
 	var fumble_chance := 0.0
+	# A second defender joining a wrap adds the first tackler's hit power to theirs.
+	var joined: bool = cp.wrap_holder != 0 and cp.wrap_holder != tackler_id
+	if joined:
+		hit += cp.wrap_hit * float(tk["join_hit_factor"])
+		counter_note += " + first tackler %.1f" % cp.wrap_hit
 	if not dive and c.juke_timer > 0.0:
 		# A juke is weak against a close tackle: the plant leaves you off balance.
 		balance -= float(tk["juke_close_penalty"])
@@ -511,44 +527,113 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var angle_name := "from behind" if behind else ("head-on" if facing >= float(tk["front_cos"]) else "from the side")
 	var detail := "%s %s %s: hit %.1f vs balance %.1f%s" % [_name(tackler_id), "dove" if dive else "hit", angle_name, hit, balance, counter_note]
 
-	var down_decel: float = float(mv["run_speed"]) / float(mv["down_stop_time"])
+	# A tackler needs some speed to put a carrier down alone. Without it (or in a close
+	# contest) the best they can do is wrap him up and wait for help or for him to tire.
+	# A carrier caught mid-spin or mid-hurdle is defenceless, so even a standing tackler drops him.
+	var defenceless: bool = c.status == AthleteState.Status.SPIN or c.status == AthleteState.Status.HURDLE
+	var can_takedown: bool = closing >= float(tk["takedown_speed"]) or joined or defenceless
 	if diff < float(tk["broken_margin"]):
 		c.status = AthleteState.Status.STUMBLE
 		c.status_timer = tk["broken_stumble_time"]
 		c.speed *= tk["broken_speed_keep"]
 		t.status = AthleteState.Status.STUMBLE
 		t.status_timer = tk["defender_stumble_time"]
+		_end_wrap(carrier_id, false)
 		_announce("BROKEN TACKLE (%s)" % detail)
 		_after_dive(t, dive)
 		return
+	if diff < float(tk["clean_margin"]) or not can_takedown:
+		_start_wrap(tackler_id, carrier_id, hit)
+		_announce("WRAPPED UP (%s)" % detail)
+		return
 
-	var spot := c.pos
-	if diff >= float(tk["clean_margin"]):
-		var big: bool = diff >= float(tk["big_hit_margin"]) and not behind
-		c.status = AthleteState.Status.DOWN
-		c.status_timer = tk["down_time_big"] if big else tk["down_time"]
-		_announce(("BIG HIT" if big else "TACKLE") + " (%s)" % detail)
-	else:
-		# Drag: a close contest. Closer to a broken tackle means a longer slide.
-		var f := inverse_lerp(float(tk["clean_margin"]), float(tk["broken_margin"]), diff)
-		var slide := lerpf(float(tk["drag_min_m"]), float(tk["drag_max_m"]), clampf(f, 0.0, 1.0))
-		c.status = AthleteState.Status.DOWN
-		c.status_timer = tk["down_time"]
-		c.speed = sqrt(2.0 * down_decel * slide)
-		spot = c.pos + c.heading * slide
-		_announce("DRAG %.1f m (%s)" % [slide, detail])
-	if diff >= float(tk["big_hit_margin"]) and not behind:
+	var big: bool = diff >= float(tk["big_hit_margin"]) and not behind
+	c.status = AthleteState.Status.DOWN
+	c.status_timer = tk["down_time_big"] if big else tk["down_time"]
+	_end_wrap(carrier_id, false)
+	_announce(("BIG HIT" if big else "TACKLE") + " (%s)" % detail)
+	if big:
 		fumble_chance = maxf(fumble_chance, float(tk["big_hit_fumble_chance"]))
 	var roll: float = fumble_roll if fumble_roll >= 0.0 else randf()
 	if roll < fumble_chance:
-		_fumble(carrier_id, spot)
+		_fumble(carrier_id, c.pos)
 	else:
-		# Stand-in for the end of the play: the ball is set down where the carrier ends up.
-		ball_kind = Ball.LOOSE
-		ball_holder = 0
-		ball_live = false
-		ball_loose = Vector3(spot.x, float(Tuning.section("throw")["ball_radius"]), spot.y)
+		_set_ball_down(c.pos)
 	_after_dive(t, dive)
+
+
+## Stand-in for the end of the play: the ball is set down where the carrier ended up.
+func _set_ball_down(spot: Vector2) -> void:
+	ball_kind = Ball.LOOSE
+	ball_holder = 0
+	ball_live = false
+	ball_loose = Vector3(spot.x, float(Tuning.section("throw")["ball_radius"]), spot.y)
+
+
+func _start_wrap(holder_id: int, carrier_id: int, hit: float) -> void:
+	var tk: Dictionary = Tuning.section("tackle")
+	var h: SvPlayer = sv_players[holder_id]
+	var c: SvPlayer = sv_players[carrier_id]
+	var rel := h.state.pos - c.state.pos
+	if rel.length() < 0.1:
+		rel = -c.state.heading
+	c.wrap_holder = holder_id
+	c.wrap_hit = hit
+	c.wrap_local = rel.normalized().rotated(-c.state.heading.angle())
+	h.wrap_of = carrier_id
+	c.state.status = AthleteState.Status.WRAPPED
+	c.state.status_timer = tk["wrap_max_time"]
+	c.state.cut_timer = 0.0
+	h.state.status = AthleteState.Status.HOLDING
+	h.state.status_timer = tk["wrap_max_time"]
+	h.state.speed = c.state.speed
+
+
+## Let go: the holder is freed (stumbling if the carrier shook them off).
+func _end_wrap(carrier_id: int, stumble_holder: bool) -> void:
+	var c: SvPlayer = sv_players.get(carrier_id)
+	if c == null or c.wrap_holder == 0:
+		return
+	var tk: Dictionary = Tuning.section("tackle")
+	var h: SvPlayer = sv_players.get(c.wrap_holder)
+	if h != null:
+		h.wrap_of = 0
+		if h.state.status == AthleteState.Status.HOLDING:
+			h.state.status = AthleteState.Status.STUMBLE if stumble_holder else AthleteState.Status.OK
+			h.state.status_timer = tk["defender_stumble_time"] if stumble_holder else 0.0
+	if c.state.status == AthleteState.Status.WRAPPED:
+		c.state.status = AthleteState.Status.OK
+		c.state.status_timer = 0.0
+	c.wrap_holder = 0
+	c.wrap_hit = 0.0
+
+
+## Each tick: keep the holder attached, and drop a carrier who has run out of stamina.
+func _wrap_tick() -> void:
+	var tk: Dictionary = Tuning.section("tackle")
+	for cid in sv_players.keys():
+		var c: SvPlayer = sv_players[cid]
+		if c.wrap_holder == 0:
+			continue
+		var h: SvPlayer = sv_players.get(c.wrap_holder)
+		if h == null or c.state.status != AthleteState.Status.WRAPPED \
+				or h.state.status != AthleteState.Status.HOLDING \
+				or ball_kind != Ball.HELD or ball_holder != cid:
+			_end_wrap(cid, false)
+			continue
+		if c.state.stamina <= 0.0:
+			c.state.status = AthleteState.Status.DOWN
+			c.state.status_timer = tk["down_time"]
+			var holder_id := c.wrap_holder
+			_end_wrap(cid, false)
+			_set_ball_down(c.state.pos)
+			_announce("WORN DOWN: %s ran out of stamina with %s hanging on" % [_name(cid), _name(holder_id)])
+			continue
+		h.state.pos = c.state.pos + c.wrap_local.rotated(c.state.heading.angle()) * float(tk["wrap_offset"])
+		var to_c := c.state.pos - h.state.pos
+		if to_c.length() > 0.01:
+			h.state.heading = to_c.normalized()
+		h.state.speed = c.state.speed
 
 
 func _after_dive(t: AthleteState, dive: bool) -> void:
@@ -601,7 +686,10 @@ func _check_dives() -> void:
 ## Carrier counters that put you in a movement state: spin, truck, hurdle.
 func _sv_counter(id: int, kind: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.counter_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+	if p == null or p.counter_cd > 0.0:
+		return
+	var wrapped_now: bool = p.state.status == AthleteState.Status.WRAPPED
+	if p.state.status != AthleteState.Status.OK and not (wrapped_now and (kind == AthleteState.Status.SPIN or kind == AthleteState.Status.TRUCK)):
 		return
 	if ball_kind != Ball.HELD or ball_holder != id:
 		return
@@ -621,6 +709,14 @@ func _sv_counter(id: int, kind: int) -> void:
 	p.counter_cd = tk["counter_cooldown"]
 	p.counter_weak = p.state.stamina < cost
 	p.state.stamina = maxf(0.0, p.state.stamina - cost)
+	if wrapped_now:
+		# Break the hold. A spin always slips out; a truck only if it out-muscles the holder.
+		var power := float(tk["truck_bonus"]) * (float(tk["counter_weak_mult"]) if p.counter_weak else 1.0)
+		if kind == AthleteState.Status.TRUCK and power < p.wrap_hit:
+			_announce("%s tried to truck out of the hold and couldn't" % _name(id))
+			return
+		_end_wrap(id, true)
+		_announce("%s breaks the hold with a %s" % [_name(id), name])
 	p.state.status = kind
 	p.state.status_timer = time
 	p.state.cut_timer = 0.0
@@ -632,9 +728,23 @@ func _sv_counter(id: int, kind: int) -> void:
 
 func _sv_stiffarm(id: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.counter_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+	var wrapped_now: bool = p != null and p.state.status == AthleteState.Status.WRAPPED
+	if p == null or p.counter_cd > 0.0 or (p.state.status != AthleteState.Status.OK and not wrapped_now):
 		return
 	var tk: Dictionary = Tuning.section("tackle")
+	if wrapped_now:
+		# Shove the holder off: costs stamina, fails if you're too tired to shove.
+		p.counter_cd = tk["counter_cooldown"]
+		var weak: bool = p.state.stamina < float(tk["stiff_cost"])
+		p.state.stamina = maxf(0.0, p.state.stamina - float(tk["stiff_cost"]))
+		p.fx = 1
+		p.fx_timer = tk["stiff_fx_time"]
+		if weak:
+			_announce("%s was too tired to shove the holder off" % _name(id))
+		else:
+			_end_wrap(id, true)
+			_announce("%s shoves the holder off" % _name(id))
+		return
 	p.counter_cd = tk["counter_cooldown"]
 	p.stiff_timer = tk["stiff_window"]
 	p.stiff_weak = p.state.stamina < float(tk["stiff_cost"])
