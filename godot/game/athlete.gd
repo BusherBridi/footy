@@ -5,6 +5,7 @@ extends Node3D
 
 var _body_mat := StandardMaterial3D.new()
 var _ring := MeshInstance3D.new()
+var _arm := MeshInstance3D.new()
 
 
 func _init() -> void:
@@ -36,6 +37,15 @@ func _init() -> void:
 	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	disc.material = rmat
+	var arm_mesh := BoxMesh.new()
+	arm_mesh.size = Vector3(0.18, 0.18, 0.8)
+	var amat := StandardMaterial3D.new()
+	amat.albedo_color = Color(0.95, 0.5, 0.2)
+	arm_mesh.material = amat
+	_arm.mesh = arm_mesh
+	_arm.position = Vector3(0.0, 1.25, -0.85)
+	_arm.visible = false
+	add_child(_arm)
 	_ring.mesh = disc
 	_ring.position.y = 0.04
 	add_child(_ring)
@@ -45,7 +55,8 @@ func set_color(c: Color) -> void:
 	_body_mat.albedo_color = c
 
 
-func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0) -> void:
+func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0) -> void:
+	_arm.visible = fx == 1
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
 	if show:
@@ -55,6 +66,8 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0) -> vo
 	var tilt := 0.0
 	if status == AthleteState.Status.DOWN:
 		tilt = -1.45          # lying flat, head along the direction of travel
+	elif status == AthleteState.Status.DIVING:
+		tilt = -1.15
 	elif status == AthleteState.Status.STUMBLE:
 		tilt = -0.35
 	rotation = Vector3(tilt, atan2(-heading.x, -heading.y), 0.0)

@@ -22,6 +22,7 @@ static func register() -> void:
 	_action("look_up", [_axis(JOY_AXIS_RIGHT_Y, -1.0)])
 	_action("look_down", [_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 	_action("tackle", [_key(KEY_F), _button(JOY_BUTTON_X), _mouse(MOUSE_BUTTON_XBUTTON1)])
+	_action("dive", [_key(KEY_G), _button(JOY_BUTTON_B)])
 	_action("add_chaser", [_key(KEY_N)])
 	_action("add_bot", [_key(KEY_B)])      # host only: dev test bot
 	_action("clear_bots", [_key(KEY_V)])

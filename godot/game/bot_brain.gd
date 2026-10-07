@@ -24,6 +24,7 @@ var _rest := 0.0
 var _returning := false
 
 var _take_cd := 0.0
+var _dive_roll := -1            # -1 = undecided for this approach, 0 no, 1 yes
 var _throw_wait := 2.0
 var _phase := 0                 # 0 wait, 1 charging, 2 release
 var _charge_left := 0.0
@@ -56,8 +57,16 @@ func _chase(out: Dictionary, pos: Vector2, tuning: Dictionary, ctx: Dictionary) 
 	var aim := cp + cv * float(tuning["bot"]["chase_lead_s"])
 	out["move"] = (aim - pos).normalized()
 	out["sprint"] = true
-	if pos.distance_to(cp) <= float(tuning["bot"]["chase_trigger_m"]):
+	var dist := pos.distance_to(cp)
+	if dist <= float(tuning["bot"]["chase_trigger_m"]):
 		out["tackle"] = true
+	elif dist > float(tuning["bot"]["dive_trigger_m"]) + 2.0:
+		_dive_roll = -1
+	elif dist <= float(tuning["bot"]["dive_trigger_m"]):
+		if _dive_roll < 0:
+			_dive_roll = 1 if rng.randf() < float(tuning["bot"]["dive_chance"]) else 0
+		if _dive_roll == 1:
+			out["dive"] = true
 
 
 func _wander(out: Dictionary, pos: Vector2, dt: float, field: Dictionary) -> void:

@@ -16,10 +16,16 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if s.status != AthleteState.Status.OK:
 		s.status_timer -= dt
 		if s.status_timer <= 0.0:
-			s.status = AthleteState.Status.OK
-			s.status_timer = 0.0
+			if s.status == AthleteState.Status.DIVING:
+				# A dive that connects is resolved by the referee first; otherwise you hit the ground.
+				s.status = AthleteState.Status.DOWN
+				s.status_timer = tuning["tackle"]["dive_ground_time"]
+			else:
+				s.status = AthleteState.Status.OK
+				s.status_timer = 0.0
 	var stumbling := s.status == AthleteState.Status.STUMBLE
 	var down := s.status == AthleteState.Status.DOWN
+	var diving := s.status == AthleteState.Status.DIVING
 	if down:
 		want = Vector2.ZERO
 		mag = 0.0
@@ -44,6 +50,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if s.cut_timer > 0.0:
 		# Planted: no turning or acceleration for the plant duration.
 		s.cut_timer = maxf(0.0, s.cut_timer - dt)
+	elif diving:
+		pass   # committed: heading and speed are locked until the dive ends
 	else:
 		_steer_and_accelerate(s, want, mag, top, dt, m, m["down_stop_time"] if down else m["stop_time"])
 

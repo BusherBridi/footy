@@ -22,11 +22,17 @@ class SvPlayer:
 	var last_move := Vector2.ZERO
 	var last_sprint := false
 	var tackle_cd := 0.0
+	var dive_cd := 0.0
+	var stiff_timer := 0.0       # >0: a stiff arm is active (the carrier's counter window)
+	var stiff_cd := 0.0
+	var stiff_weak := false      # fired with too little stamina
+	var fx := 0                  # visual cue: 1 = stiff arm out
+	var fx_timer := 0.0
 
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
 
-const SNAP_STRIDE := 13   # floats per player (id travels in a separate int array)
+const SNAP_STRIDE := 14   # floats per player (id travels in a separate int array)
 
 var mode := Mode.NONE
 var local_id := 0
@@ -69,6 +75,7 @@ var view_ball := {}            # what the delayed view currently shows (for logs
 # Client side
 var cl_state: AthleteState = null
 var cl_prev_pos := Vector2.ZERO
+var cl_fx := 0
 var cl_seq := 0
 var cl_pending: Array = []            # entries: [seq, move, sprint]
 var cl_sent_time := {}                # seq -> send time
@@ -224,12 +231,21 @@ func _host_tick(dt: float) -> void:
 	_ball_input(inp, dt)
 	if inp.get("tackle", false):
 		_sv_tackle(1)
+	if inp.get("dive", false):
+		_sv_dive(1)
 	var me: SvPlayer = sv_players[1]
 	me.last_seq += 1
 	me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
 
 	for id in sv_players:
-		sv_players[id].tackle_cd = maxf(0.0, sv_players[id].tackle_cd - dt)
+		var q: SvPlayer = sv_players[id]
+		q.tackle_cd = maxf(0.0, q.tackle_cd - dt)
+		q.dive_cd = maxf(0.0, q.dive_cd - dt)
+		q.stiff_cd = maxf(0.0, q.stiff_cd - dt)
+		q.stiff_timer = maxf(0.0, q.stiff_timer - dt)
+		q.fx_timer = maxf(0.0, q.fx_timer - dt)
+		if q.fx_timer <= 0.0:
+			q.fx = 0
 	for id in sv_bots:
 		var bp: SvPlayer = sv_players[id]
 		var ctx := {}
@@ -242,6 +258,8 @@ func _host_tick(dt: float) -> void:
 		bp.queue.append([bp.last_seq, bi["move"], bi["sprint"]])
 		if bi.get("tackle", false):
 			_sv_tackle(id)
+		if bi.get("dive", false):
+			_sv_dive(id)
 
 	var max_q: int = int(_net()["max_input_queue"])
 	for id in sv_players:
@@ -257,6 +275,7 @@ func _host_tick(dt: float) -> void:
 		# else: starved, repeat the last input
 		Movement.step(p.state, p.last_move, p.last_sprint, dt, Tuning.data)
 
+	_check_dives()
 	sv_tick += 1
 	_ball_tick(dt)
 	var ids := PackedInt32Array()
@@ -266,7 +285,7 @@ func _host_tick(dt: float) -> void:
 		var s := p.state
 		ids.append(id)
 		data.append_array([s.pos.x, s.pos.y, s.heading.x, s.heading.y, s.speed, s.stamina,
-			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, p.acked])
+			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, p.fx, p.acked])
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
@@ -283,6 +302,8 @@ func _client_tick(dt: float) -> void:
 	_ball_input(inp, dt)
 	if inp.get("tackle", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle"))
+	if inp.get("dive", false):
+		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
 	var move: Vector2 = inp["move"]
 	var sprint: bool = inp["sprint"]
 	cl_seq += 1
@@ -356,6 +377,12 @@ func rpc_tackle() -> void:
 		_sv_tackle(multiplayer.get_remote_sender_id())
 
 
+@rpc("any_peer", "reliable")
+func rpc_dive() -> void:
+	if mode == Mode.HOST:
+		_sv_dive(multiplayer.get_remote_sender_id())
+
+
 @rpc("authority", "reliable")
 func rpc_event(text: String) -> void:
 	_log_event("(event received) " + text)
@@ -379,6 +406,9 @@ func _sv_tackle(id: int) -> void:
 	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
 		return
 	var tk: Dictionary = Tuning.section("tackle")
+	if ball_kind == Ball.HELD and ball_holder == id:
+		_sv_stiffarm(id)       # same button: with the ball it's a stiff arm
+		return
 	p.tackle_cd = tk["cooldown"]
 
 	var target := 0
@@ -395,7 +425,7 @@ func _sv_tackle(id: int) -> void:
 	_resolve_tackle(id, target)
 
 
-func _resolve_tackle(tackler_id: int, carrier_id: int) -> void:
+func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var tk: Dictionary = Tuning.section("tackle")
 	var mv: Dictionary = Tuning.section("movement")
 	var t: AthleteState = sv_players[tackler_id].state
@@ -412,10 +442,25 @@ func _resolve_tackle(tackler_id: int, carrier_id: int) -> void:
 		balance_factor = tk["side_balance_factor"]
 	var weight: float = tk["weight"]
 	var hit: float = weight * (float(tk["hit_base"]) + closing)
+	if dive:
+		hit *= float(tk["dive_hit_factor"])
 	var balance: float = weight * (float(tk["balance_base"]) + c.speed * balance_factor)
+	var cp: SvPlayer = sv_players[carrier_id]
+	var counter_note := ""
+	if not dive and cp.stiff_timer > 0.0:
+		# A well-timed stiff arm adds balance. Weak against hits from the side or behind,
+		# and weaker still when it was thrown with an empty stamina bar.
+		var bonus: float = tk["stiff_bonus"]
+		if cp.stiff_weak:
+			bonus *= float(tk["stiff_weak_mult"])
+		if facing < float(tk["front_cos"]):
+			bonus *= float(tk["stiff_side_mult"])
+		balance += bonus
+		counter_note = " + stiff arm %.1f" % bonus
+		cp.stiff_timer = 0.0
 	var diff := hit - balance
 	var angle_name := "from behind" if behind else ("head-on" if facing >= float(tk["front_cos"]) else "from the side")
-	var detail := "%s hit %s: hit %.1f vs balance %.1f" % [_name(tackler_id), angle_name, hit, balance]
+	var detail := "%s %s %s: hit %.1f vs balance %.1f%s" % [_name(tackler_id), "dove" if dive else "hit", angle_name, hit, balance, counter_note]
 
 	var down_decel: float = float(mv["run_speed"]) / float(mv["down_stop_time"])
 	if diff < float(tk["broken_margin"]):
@@ -425,6 +470,7 @@ func _resolve_tackle(tackler_id: int, carrier_id: int) -> void:
 		t.status = AthleteState.Status.STUMBLE
 		t.status_timer = tk["defender_stumble_time"]
 		_announce("BROKEN TACKLE (%s)" % detail)
+		_after_dive(t, dive)
 		return
 
 	var spot := c.pos
@@ -446,6 +492,54 @@ func _resolve_tackle(tackler_id: int, carrier_id: int) -> void:
 	ball_kind = Ball.LOOSE
 	ball_holder = 0
 	ball_loose = Vector3(spot.x, float(Tuning.section("throw")["ball_radius"]), spot.y)
+	_after_dive(t, dive)
+
+
+func _after_dive(t: AthleteState, dive: bool) -> void:
+	if dive:
+		var tk: Dictionary = Tuning.section("tackle")
+		t.status = AthleteState.Status.DOWN
+		t.status_timer = tk["dive_hit_ground_time"]
+
+
+func _sv_dive(id: int) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or p.state.status != AthleteState.Status.OK or p.dive_cd > 0.0:
+		return
+	var tk: Dictionary = Tuning.section("tackle")
+	p.dive_cd = tk["dive_cooldown"]
+	p.state.status = AthleteState.Status.DIVING
+	p.state.status_timer = tk["dive_time"]
+	p.state.speed = maxf(p.state.speed * float(tk["dive_speed_mult"]), float(tk["dive_min_speed"]))
+	p.state.cut_timer = 0.0
+
+
+## A diver connects with the carrier if they get within the hit radius while airborne.
+func _check_dives() -> void:
+	if ball_kind != Ball.HELD or not sv_players.has(ball_holder):
+		return
+	var tk: Dictionary = Tuning.section("tackle")
+	var carrier: SvPlayer = sv_players[ball_holder]
+	for id in sv_players:
+		var p: SvPlayer = sv_players[id]
+		if id == ball_holder or p.state.status != AthleteState.Status.DIVING:
+			continue
+		if p.state.pos.distance_to(carrier.state.pos) <= float(tk["dive_hit_radius"]):
+			_resolve_tackle(id, ball_holder, true)
+			return
+
+
+func _sv_stiffarm(id: int) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or p.stiff_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+		return
+	var tk: Dictionary = Tuning.section("tackle")
+	p.stiff_cd = tk["stiff_cooldown"]
+	p.stiff_timer = tk["stiff_window"]
+	p.stiff_weak = p.state.stamina < float(tk["stiff_cost"])
+	p.state.stamina = maxf(0.0, p.state.stamina - float(tk["stiff_cost"]))
+	p.fx = 1
+	p.fx_timer = tk["stiff_fx_time"]
 
 
 func _name(id: int) -> String:
@@ -598,7 +692,8 @@ func _state_from(a: PackedFloat32Array) -> AthleteState:
 
 func _reconcile(a: PackedFloat32Array) -> void:
 	var s := _state_from(a)
-	var ack := int(a[12])
+	var ack := int(a[13])
+	cl_fx = int(a[12])
 	if cl_state == null:
 		cl_state = s
 		cl_prev_pos = s.pos
@@ -693,7 +788,7 @@ func _update_host_visuals() -> void:
 	var a := _alpha()
 	for id in sv_players:
 		var p: SvPlayer = sv_players[id]
-		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status)
+		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, ball_angle, sv_tick + a)
 
@@ -701,7 +796,7 @@ func _update_host_visuals() -> void:
 func _update_client_visuals(delta: float) -> void:
 	correction *= exp(-float(_net()["correction_decay"]) * delta)
 	var me := _ensure_athlete(local_id)
-	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed, cl_state.status)
+	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed, cl_state.status, cl_fx)
 
 	if latest_tick < 0:
 		return
@@ -730,13 +825,14 @@ func _update_client_visuals(delta: float) -> void:
 		var heading := Vector2(b[2], b[3])
 		var spd: float = b[4]
 		var st := int(b[10])
+		var fx := int(b[12])
 		if s0["players"].has(id):
 			var a: PackedFloat32Array = s0["players"][id]
 			var ah := Vector2(a[2], a[3])
 			pos = Vector2(a[0], a[1]).lerp(pos, t)
 			heading = ah.slerp(heading, t) if ah.dot(heading) > -0.99 else heading
 			spd = lerpf(a[4], spd, t)
-		_ensure_athlete(id).set_visual(pos, heading, spd, st)
+		_ensure_athlete(id).set_visual(pos, heading, spd, st, fx)
 
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]

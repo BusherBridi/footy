@@ -135,7 +135,9 @@
     },
     "route_rest_seconds": 3.0,
     "chase_trigger_m": 1.4,
-    "chase_lead_s": 0.25
+    "chase_lead_s": 0.25,
+    "dive_trigger_m": 3.2,
+    "dive_chance": 0.5
   },
   "catch": {
     "radius": 1.2,
@@ -168,6 +170,21 @@
     "broken_stumble_time": 0.6,
     "broken_speed_keep": 0.7,
     "defender_stumble_time": 0.6,
-    "whiff_stumble_time": 0.7
+    "whiff_stumble_time": 0.7,
+    "dive_time": 0.3,
+    "dive_min_speed": 8.0,
+    "dive_speed_mult": 1.15,
+    "dive_ground_time": 1.0,
+    "dive_hit_ground_time": 0.4,
+    "dive_hit_radius": 1.3,
+    "dive_cooldown": 1.5,
+    "dive_hit_factor": 1.0,
+    "stiff_window": 0.35,
+    "stiff_cooldown": 0.8,
+    "stiff_cost": 0.15,
+    "stiff_bonus": 6.0,
+    "stiff_weak_mult": 0.5,
+    "stiff_side_mult": 0.25,
+    "stiff_fx_time": 0.35
   }
 }
