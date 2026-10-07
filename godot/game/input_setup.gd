@@ -23,6 +23,7 @@ static func register() -> void:
 	_action("look_down", [_axis(JOY_AXIS_RIGHT_Y, 1.0)])
 	_action("tackle", [_key(KEY_F), _button(JOY_BUTTON_X), _mouse(MOUSE_BUTTON_XBUTTON1)])
 	_action("dive", [_key(KEY_G), _button(JOY_BUTTON_B)])
+	_action("lateral", [_key(KEY_Z), _button(JOY_BUTTON_LEFT_SHOULDER)])
 	_action("strip", [_key(KEY_R), _button(JOY_BUTTON_Y)])      # a defender's Y; the carrier's Y is truck
 	_action("truck", [_key(KEY_T), _button(JOY_BUTTON_Y)])
 	_action("hurdle", [_key(KEY_SPACE), _button(JOY_BUTTON_A)])

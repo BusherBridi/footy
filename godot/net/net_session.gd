@@ -62,6 +62,7 @@ var ball_p0 := Vector3.ZERO
 var ball_yaw := 0.0
 var ball_charge := 0.0
 var ball_lob := false
+var ball_lateral := false         # a pitch: if nobody catches it, it stays live like a fumble
 var ball_angle := -1.0           # launch angle (radians) for angle+power throws, -1 for the old model
 var ball_thrower := 0
 var ball_loose := Vector3(0, 0.3, 0)
@@ -243,6 +244,8 @@ func _host_tick(dt: float) -> void:
 		_sv_tackle(1)
 	if inp.get("dive", false):
 		_sv_dive(1)
+	if inp.get("lateral", false):
+		_sv_lateral(1, inp.get("yaw", 0.0))
 	if inp.get("strip", false):
 		_sv_strip(1)
 	if inp.get("truck", false):
@@ -324,6 +327,9 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle"))
 	if inp.get("dive", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
+	if inp.get("lateral", false):
+		var lat_yaw: float = inp.get("yaw", 0.0)
+		_send(func(): if cl_connected: rpc_id(1, "rpc_lateral", lat_yaw))
 	if inp.get("strip", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_strip"))
 	if inp.get("truck", false):
@@ -407,6 +413,12 @@ func rpc_tackle() -> void:
 func rpc_dive() -> void:
 	if mode == Mode.HOST:
 		_sv_dive(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "reliable")
+func rpc_lateral(yaw: float) -> void:
+	if mode == Mode.HOST:
+		_sv_lateral(multiplayer.get_remote_sender_id(), yaw)
 
 
 @rpc("any_peer", "reliable")
@@ -819,10 +831,35 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 	ball_lob = lob
 	ball_angle = angle if angle >= 0.0 else -1.0
 	ball_live = false
+	ball_lateral = false
 	ball_launch_tick = sv_tick
 	ball_thrower = id
 	ball_kind = Ball.FLIGHT
 	ball_holder = 0
+
+
+## A pitch: a short, flat toss that may only go backward or sideways (upfield is -z).
+func _sv_lateral(id: int, yaw: float) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or ball_kind != Ball.HELD or ball_holder != id or p.state.status == AthleteState.Status.DOWN:
+		return
+	var th: Dictionary = Tuning.section("throw")
+	var dir := Vector2(-sin(yaw), -cos(yaw))
+	if dir.y < -sin(deg_to_rad(float(th["lateral_forward_slack_deg"]))):
+		_announce("%s can't pitch the ball forward" % _name(id))
+		return
+	ball_p0 = Vector3(p.state.pos.x, float(th["lateral_release_height"]), p.state.pos.y)
+	ball_yaw = yaw
+	ball_charge = inverse_lerp(float(th["min_range"]), float(th["max_range"]), float(th["lateral_range"]))
+	ball_lob = false
+	ball_angle = -1.0
+	ball_live = false
+	ball_lateral = true
+	ball_launch_tick = sv_tick
+	ball_thrower = id
+	ball_kind = Ball.FLIGHT
+	ball_holder = 0
+	_log_event("%s pitches it back" % _name(id))
 
 
 func _ball_tick(dt: float) -> void:
@@ -839,6 +876,8 @@ func _ball_tick(dt: float) -> void:
 	for k in 3:
 		var ts := minf(maxf(0.0, t_now - dt * (2 - k) / 3.0), float(fl["T"]))
 		var bpos := BallFlight.position_at(ball_p0, fl, g, ts)
+		if ball_lateral and Vector2(bpos.x - ball_p0.x, bpos.z - ball_p0.z).length() < float(Tuning.section("throw")["lateral_min_travel"]):
+			continue       # a pitch can't be grabbed right at the thrower's hands
 		var cands: Array = []
 		for id in sv_players:
 			if id == ball_thrower and ts < float(c["thrower_grace"]):
@@ -853,16 +892,26 @@ func _ball_tick(dt: float) -> void:
 		if cands.size() > 1 and cands[1][0] - cands[0][0] <= float(c["tie_margin"]):
 			ball_kind = Ball.LOOSE      # contested tie: incomplete
 			ball_loose = Vector3(bpos.x, float(Tuning.section("throw")["ball_radius"]), bpos.z)
+			_loose_after_flight()
 			_log_event("incomplete: tie between %d and %d" % [cands[0][1], cands[1][1]])
 		else:
 			ball_kind = Ball.HELD
 			ball_holder = cands[0][1]
+			ball_live = false
 			_log_event("catch by %d (%.2f m from the ball, %d in range)" % [ball_holder, cands[0][0], cands.size()])
 		return
 	if t_now >= float(fl["T"]):
 		ball_kind = Ball.LOOSE
 		ball_loose = fl["land"]
-		_log_event("incomplete: ball hit the ground")
+		_loose_after_flight()
+		_log_event("lateral hit the ground (live ball)" if ball_lateral else "incomplete: ball hit the ground")
+
+
+## An incomplete forward pass is dead; a dropped lateral is a live ball anyone can recover.
+func _loose_after_flight() -> void:
+	ball_live = ball_lateral
+	ball_vel = Vector2.ZERO
+	ball_live_age = 0.0
 
 
 ## A live loose ball slides to a stop; anyone on their feet who gets close picks it up.

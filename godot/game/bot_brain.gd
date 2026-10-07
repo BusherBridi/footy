@@ -6,6 +6,7 @@ extends RefCounted
 ##   route   runs a receiver route from where it spawned, rests, jogs back, repeats
 ## With is_qb it also takes the ball and throws downfield now and then.
 
+var lateral_chance := 0.0        # QB bots: chance to pitch it back instead of throwing
 var role := ""                  # "chase": runs at the ball carrier and tackles
 var is_qb := false
 var aim_mode := false           # throw with the look-up aim + tap instead of hold-to-charge
@@ -144,7 +145,12 @@ func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void
 	match _phase:
 		0:  # wait, then start a throw
 			_throw_wait -= dt
-			if _throw_wait <= 0.0:
+			if _throw_wait <= 0.0 and rng.randf() < lateral_chance:
+				out["lateral"] = true
+				out["yaw"] = PI + rng.randf_range(-0.5, 0.5)     # backward
+				_throw_wait = rng.randf_range(2.0, 4.0)
+				_take_cd = 3.0
+			elif _throw_wait <= 0.0:
 				_phase = 1
 				var ct: float = tuning["throw"]["power_charge_time"] if aim_mode else tuning["throw"]["charge_time"]
 				_charge_left = rng.randf_range(0.2, 1.0) * float(ct)
