@@ -12,11 +12,25 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 
 	s.cut_cooldown = maxf(0.0, s.cut_cooldown - dt)
 
-	var sprinting: bool = sprint and s.stamina > 0.0 and mag > 0.1
+	# Referee-imposed states: stumbling is slow and clumsy, being down means no control.
+	if s.status != AthleteState.Status.OK:
+		s.status_timer -= dt
+		if s.status_timer <= 0.0:
+			s.status = AthleteState.Status.OK
+			s.status_timer = 0.0
+	var stumbling := s.status == AthleteState.Status.STUMBLE
+	var down := s.status == AthleteState.Status.DOWN
+	if down:
+		want = Vector2.ZERO
+		mag = 0.0
+
+	var sprinting: bool = sprint and s.stamina > 0.0 and mag > 0.1 and s.status == AthleteState.Status.OK
 	var top: float = run_speed * (m["sprint_multiplier"] if sprinting else 1.0)
+	if stumbling:
+		top *= m["stumble_speed_mult"]
 
 	# Cut: a hard stick flick makes a brief plant that keeps part of your speed.
-	if m["cut_enabled"] and s.cut_timer <= 0.0 and s.cut_cooldown <= 0.0 \
+	if m["cut_enabled"] and s.status == AthleteState.Status.OK and s.cut_timer <= 0.0 and s.cut_cooldown <= 0.0 \
 			and mag >= m["cut_min_input"] and s.prev_dir != Vector2.ZERO \
 			and s.speed >= m["cut_min_speed"]:
 		var flick := rad_to_deg(absf(s.prev_dir.angle_to(want)))
@@ -31,7 +45,7 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 		# Planted: no turning or acceleration for the plant duration.
 		s.cut_timer = maxf(0.0, s.cut_timer - dt)
 	else:
-		_steer_and_accelerate(s, want, mag, top, dt, m)
+		_steer_and_accelerate(s, want, mag, top, dt, m, m["down_stop_time"] if down else m["stop_time"])
 
 	# Stamina: sprinting drains, otherwise it refills (faster when standing).
 	if sprinting:
@@ -44,7 +58,7 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	_clamp_to_field(s, tuning["field"])
 
 
-static func _steer_and_accelerate(s: AthleteState, want: Vector2, mag: float, top: float, dt: float, m: Dictionary) -> void:
+static func _steer_and_accelerate(s: AthleteState, want: Vector2, mag: float, top: float, dt: float, m: Dictionary, stop_time: float) -> void:
 	var run_speed: float = m["run_speed"]
 	var target := 0.0
 
@@ -65,7 +79,7 @@ static func _steer_and_accelerate(s: AthleteState, want: Vector2, mag: float, to
 	if s.speed < target:
 		s.speed = minf(target, s.speed + (run_speed / m["accel_time"]) * dt)
 	else:
-		s.speed = maxf(target, s.speed - (run_speed / m["stop_time"]) * dt)
+		s.speed = maxf(target, s.speed - (run_speed / stop_time) * dt)
 
 
 static func _clamp_to_field(s: AthleteState, f: Dictionary) -> void:

@@ -23,7 +23,9 @@
     "cut_cooldown": 0.35,
     "sprint_seconds": 4.0,
     "stamina_regen_jog_seconds": 12.0,
-    "stamina_regen_stand_seconds": 6.0
+    "stamina_regen_stand_seconds": 6.0,
+    "down_stop_time": 0.5,
+    "stumble_speed_mult": 0.5
   },
   "camera": {
     "distance": 7.0,
@@ -131,7 +133,9 @@
         ]
       ]
     },
-    "route_rest_seconds": 3.0
+    "route_rest_seconds": 3.0,
+    "chase_trigger_m": 1.4,
+    "chase_lead_s": 0.25
   },
   "catch": {
     "radius": 1.2,
@@ -142,5 +146,28 @@
     "thrower_grace": 0.4,
     "tie_margin": 0.05,
     "show_ring": true
+  },
+  "tackle": {
+    "reach": 1.6,
+    "arc_half_deg": 80.0,
+    "cooldown": 0.6,
+    "hit_base": 2.0,
+    "balance_base": 2.0,
+    "weight": 1.0,
+    "front_cos": 0.5,
+    "behind_cos": -0.5,
+    "side_balance_factor": 0.25,
+    "behind_balance_factor": 0.0,
+    "big_hit_margin": 5.0,
+    "clean_margin": 1.0,
+    "broken_margin": -2.0,
+    "down_time": 1.0,
+    "down_time_big": 1.5,
+    "drag_min_m": 1.0,
+    "drag_max_m": 2.7,
+    "broken_stumble_time": 0.6,
+    "broken_speed_keep": 0.7,
+    "defender_stumble_time": 0.6,
+    "whiff_stumble_time": 0.7
   }
 }

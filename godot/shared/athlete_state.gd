@@ -3,6 +3,8 @@ extends RefCounted
 ## Everything the movement step needs. Plain data so it can be copied for
 ## client prediction and replayed on the server.
 
+enum Status { OK, STUMBLE, DOWN }
+
 var pos := Vector2.ZERO          # x, z on the field plane (metres)
 var heading := Vector2(0, -1)    # unit direction of travel / facing
 var speed := 0.0
@@ -10,6 +12,8 @@ var stamina := 1.0               # 0..1
 var cut_timer := 0.0             # >0 while planted in a cut
 var cut_cooldown := 0.0
 var prev_dir := Vector2.ZERO     # last frame's stick direction, for flick detection
+var status := Status.OK          # set by the referee (tackles); movement just obeys it
+var status_timer := 0.0
 
 
 func copy() -> AthleteState:
@@ -21,4 +25,6 @@ func copy() -> AthleteState:
 	s.cut_timer = cut_timer
 	s.cut_cooldown = cut_cooldown
 	s.prev_dir = prev_dir
+	s.status = status
+	s.status_timer = status_timer
 	return s

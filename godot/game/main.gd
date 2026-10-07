@@ -17,6 +17,9 @@ var args := {}
 var lob := false
 var throw_mode := NetSession.ThrowMode.AIM
 var _throw_latch := false
+var _tackle_latch := false
+var event_label := Label.new()
+var _event_time := 0.0
 var _take_latch := false
 
 
@@ -30,6 +33,9 @@ func _ready() -> void:
 	session.input_provider = _provide_input
 	session.local_ready.connect(func(a: Athlete): camera.target = a)
 	session.disconnected.connect(_on_disconnected)
+	session.event_text.connect(func(t: String):
+		event_label.text = t
+		_event_time = 2.5)
 	session.log_enabled = args.has("log")
 	if args.has("log"):
 		print("Footy started with args: ", OS.get_cmdline_user_args(), "  log file: ", ProjectSettings.globalize_path("user://footy_log.txt"))
@@ -53,6 +59,8 @@ func _ready() -> void:
 		_host()
 		for i in int(args.get("bots", 0)):
 			session.host_add_bot()
+		for i in int(args.get("chasers", 0)):
+			session.host_add_bot("chase")
 	elif args.has("join"):
 		_join(String(args["join"]))
 
@@ -103,6 +111,8 @@ func _provide_input() -> Dictionary:
 	_take_latch = false
 	var tap := _throw_latch
 	_throw_latch = false
+	var tackle := _tackle_latch
+	_tackle_latch = false
 	return {
 		"move": camera.world_move(stick),
 		"sprint": Input.is_action_pressed("sprint") or (Input.is_action_pressed("sprint_trigger") and not aiming),
@@ -114,6 +124,7 @@ func _provide_input() -> Dictionary:
 		"pitch": camera.pitch,
 		"throw_tap": tap and aiming,
 		"take": take,
+		"tackle": tackle,
 	}
 
 
@@ -142,6 +153,12 @@ func _build_ui() -> void:
 	add_child(layer)
 	reticle.visible = false
 	layer.add_child(reticle)
+	event_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	event_label.position = Vector2(-300, 60)
+	event_label.custom_minimum_size = Vector2(600, 0)
+	event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	event_label.add_theme_font_size_override("font_size", 22)
+	layer.add_child(event_label)
 	hud.position = Vector2(12, 8)
 	hud.add_theme_font_size_override("font_size", 18)
 	layer.add_child(hud)
@@ -170,6 +187,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
+	if Input.is_action_just_pressed("tackle"):
+		_tackle_latch = true
+	if Input.is_action_just_pressed("add_chaser"):
+		session.host_add_bot("chase")
 	if Input.is_action_just_pressed("add_bot"):
 		session.host_add_bot()
 	if Input.is_action_just_pressed("clear_bots"):
@@ -186,7 +207,9 @@ func _physics_process(_delta: float) -> void:
 		camera.cycle_style()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_event_time -= delta
+	event_label.visible = _event_time > 0.0
 	camera.set_qb(session.local_has_ball())
 	camera.set_aiming(session.aim_active)
 	reticle.visible = session.aim_active
@@ -203,9 +226,9 @@ func _process(_delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add receiver bot, N add chaser bot, V remove bots\nF/X tackle the ball carrier\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
-		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
+		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN"][int(s.status)],
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),
 		"ANGLE+POWER (look = angle, hold = power)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge = distance)",
 		int(session.throw_charge * 100.0), camera.profile_name()]

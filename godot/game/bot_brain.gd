@@ -6,6 +6,7 @@ extends RefCounted
 ##   route   runs a receiver route from where it spawned, rests, jogs back, repeats
 ## With is_qb it also takes the ball and throws downfield now and then.
 
+var role := ""                  # "chase": runs at the ball carrier and tackles
 var is_qb := false
 var aim_mode := false           # throw with the look-up aim + tap instead of hold-to-charge
 var _pitch := 0.0
@@ -34,15 +35,29 @@ func _init() -> void:
 	rng.randomize()
 
 
-func think(pos: Vector2, dt: float, tuning: Dictionary, has_ball: bool) -> Dictionary:
+func think(pos: Vector2, dt: float, tuning: Dictionary, has_ball: bool, ctx := {}) -> Dictionary:
 	var out := {"move": Vector2.ZERO, "sprint": false}
-	if route_name != "":
+	if role == "chase":
+		_chase(out, pos, tuning, ctx)
+	elif route_name != "":
 		_route(out, pos, dt, tuning)
 	else:
 		_wander(out, pos, dt, tuning["field"])
 	if is_qb:
 		_qb(out, dt, tuning, has_ball)
 	return out
+
+
+func _chase(out: Dictionary, pos: Vector2, tuning: Dictionary, ctx: Dictionary) -> void:
+	if not ctx.has("carrier"):
+		return
+	var cp: Vector2 = ctx["carrier"]
+	var cv: Vector2 = ctx.get("carrier_vel", Vector2.ZERO)
+	var aim := cp + cv * float(tuning["bot"]["chase_lead_s"])
+	out["move"] = (aim - pos).normalized()
+	out["sprint"] = true
+	if pos.distance_to(cp) <= float(tuning["bot"]["chase_trigger_m"]):
+		out["tackle"] = true
 
 
 func _wander(out: Dictionary, pos: Vector2, dt: float, field: Dictionary) -> void:

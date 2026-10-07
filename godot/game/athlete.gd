@@ -45,11 +45,16 @@ func set_color(c: Color) -> void:
 	_body_mat.albedo_color = c
 
 
-func set_visual(pos: Vector2, heading: Vector2, speed := 0.0) -> void:
+func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0) -> void:
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
 	if show:
 		var r := CatchRules.radius_for(speed, Tuning.data)
 		_ring.scale = Vector3(r, 1, r)
 	position = Vector3(pos.x, 0.0, pos.y)
-	rotation.y = atan2(-heading.x, -heading.y)
+	var tilt := 0.0
+	if status == AthleteState.Status.DOWN:
+		tilt = -1.45          # lying flat, head along the direction of travel
+	elif status == AthleteState.Status.STUMBLE:
+		tilt = -0.35
+	rotation = Vector3(tilt, atan2(-heading.x, -heading.y), 0.0)
