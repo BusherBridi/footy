@@ -28,8 +28,13 @@
     "stumble_speed_mult": 0.5,
     "cut_stamina_cost": 0.08,
     "juke_window": 0.4,
-    "spin_speed_mult": 0.7,
-    "truck_speed_mult": 0.75
+    "spin_speed_mult": 0.85,
+    "truck_speed_mult": 0.75,
+    "pop_angle_deg": 70.0,
+    "pop_time": 0.25,
+    "pop_speed_mult": 1.1,
+    "spin_side_input": 0.35,
+    "spin_side_cross": 0.35
   },
   "camera": {
     "distance": 7.0,
@@ -193,15 +198,22 @@
     "head_on_balance_factor": 0.6,
     "counter_cooldown": 0.8,
     "counter_weak_mult": 0.5,
-    "spin_time": 0.4,
+    "spin_time": 0.35,
     "spin_cost": 0.15,
-    "spin_bonus": 14.0,
     "truck_time": 0.5,
     "truck_cost": 0.3,
     "truck_bonus": 14.0,
     "truck_side_mult": 0.3,
     "hurdle_time": 0.5,
     "hurdle_cost": 0.15,
-    "hurdle_close_penalty": 12.0
+    "hurdle_close_penalty": 12.0,
+    "spin_balance_penalty": 14.0,
+    "spin_fumble_chance": 0.7,
+    "hurdle_fumble_chance": 0.25,
+    "big_hit_fumble_chance": 0.12,
+    "fumble_pop_speed": 6.0,
+    "fumble_friction": 8.0,
+    "fumble_pickup_radius": 1.0,
+    "fumble_pickup_delay": 0.4
   }
 }

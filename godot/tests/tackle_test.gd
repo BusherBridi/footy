@@ -49,9 +49,21 @@ func _ready():
 	print("%-46s %s" % ["TRUCK vs charging sprinter, head-on", cnt(AthleteState.Status.TRUCK, Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0)])
 	print("%-46s %s" % ["TRUCK vs hit from the side", cnt(AthleteState.Status.TRUCK, Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0)])
 	print("%-46s %s" % ["TRUCK with empty stamina, head-on sprinter", cnt(AthleteState.Status.TRUCK, Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 0.05)])
-	print("%-46s %s" % ["SPIN vs hit from the side", cnt(AthleteState.Status.SPIN, Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0)])
-	print("%-46s %s" % ["no spin, same hit from the side", t(Vector2(1.2, 0), Vector2(-1, 0), sprint, run * 0.7)])
-	print("%-46s %s" % ["SPIN vs head-on hit (no help)", cnt(AthleteState.Status.SPIN, Vector2(0, -1.2), Vector2(0, 1), sprint, run, 1.0)])
+	s.fumble_roll = 0.0
+	print("%-46s %s" % ["tackled during a SPIN (dice forced to fumble)", cnt(AthleteState.Status.SPIN, Vector2(0, -1.2), Vector2(0, 1), sprint, run, 1.0, true)])
+	s.fumble_roll = 1.0
+	print("%-46s %s" % ["tackled during a SPIN (dice forced no fumble)", cnt(AthleteState.Status.SPIN, Vector2(0, -1.2), Vector2(0, 1), sprint, run, 1.0, true)])
+	s.fumble_roll = 0.0
+	print("%-46s %s" % ["tackled in the air on a HURDLE (forced fumble)", cnt(AthleteState.Status.HURDLE, Vector2(0, -1.2), Vector2(0, 1), 0.0, run, 1.0, true)])
+	s.fumble_roll = 1.0
+	print("%-46s %s" % ["plain clean tackle, no fumble chance", cnt(0, Vector2(0, -1.2), Vector2(0, 1), 0.0, 0.0, 1.0, true)])
+	s.fumble_roll = -1.0
+	print()
+	print("%-46s %s" % ["spin pop + fumble recovery", "result"])
+	print("%-46s %s" % ["spin, hold RIGHT, then pop", spin_pop(Vector2(1, 0))])
+	print("%-46s %s" % ["spin, hold LEFT, then pop", spin_pop(Vector2(-1, 0))])
+	print("%-46s %s" % ["spin, no stick, then pop", spin_pop(Vector2.ZERO)])
+	print("%-46s %s" % ["fumble recovered by a nearby player", fumble_recovery()])
 	print("%-46s %s" % ["HURDLE vs a tackler on their feet", cnt(AthleteState.Status.HURDLE, Vector2(0, -1.2), Vector2(0, 1), 0.0, run, 1.0)])
 	print("%-46s %s" % ["HURDLE vs a dive", hurdle_dive()])
 	print("%-46s %s" % ["counter cooldown (spin then truck at once)", counter_cd()])
@@ -59,16 +71,58 @@ func _ready():
 
 
 ## Carrier uses a counter, then the tackler presses tackle.
-func cnt(kind: int, tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float) -> String:
+func cnt(kind: int, tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, all_events := false) -> String:
 	reset(tp, th, tspeed, cspeed)
 	var c: AthleteState = s.sv_players[2].state
 	c.stamina = stamina
 	var speed_before := c.speed
 	s._sv_counter(2, kind)
 	var out: Array = []
-	s.event_text.connect(func(x): out.append(x), CONNECT_ONE_SHOT)
+	var cb := func(x): out.append(x)
+	s.event_text.connect(cb)
+	if kind == 0:
+		s.sv_players[2].state.status = 0
 	s._sv_tackle(3)
-	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]]
+	s.event_text.disconnect(cb)
+	var shown: String = (" | ".join(out) if all_events else (out[0] if out.size() > 0 else "(none)"))
+	shown = shown.replace("(player 3 ", "(")
+	return "%s -> ball %s%s" % [shown, ["loose", "held", "flight"][s.ball_kind], " (LIVE)" if s.ball_live else ""]
+
+
+func spin_pop(stick: Vector2) -> String:
+	reset(Vector2(0, -9), Vector2(0, 1), 0.0, 7.0)
+	var a: AthleteState = s.sv_players[2].state
+	s._sv_counter(2, AthleteState.Status.SPIN)
+	var start := a.pos
+	var dt := 1.0 / 30.0
+	var trace := ""
+	for i in 20:
+		Movement.step(a, stick, false, dt, Tuning.data)
+		if i == 4 or i == 12 or i == 19:
+			trace += " | t=%.2fs %s heading (%.2f, %.2f) speed %.1f" % [(i + 1) * dt, ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle", "pop"][a.status], a.heading.x, a.heading.y, a.speed]
+	return "moved (%.1f, %.1f)%s" % [a.pos.x - start.x, a.pos.y - start.y, trace]
+
+
+func fumble_recovery() -> String:
+	reset(Vector2(0, -1.2), Vector2(0, 1), 8.75, 7.0)
+	s.fumble_roll = 0.0
+	s.sv_players[2].state.status = AthleteState.Status.SPIN
+	s.sv_players[2].state.status_timer = 0.3
+	s._sv_tackle(3)
+	s.fumble_roll = -1.0
+	var line := ""
+	for i in 40:
+		s._host_tick(1.0 / 30.0)
+		if s.ball_kind != NetSession.Ball.LOOSE:
+			line = "recovered after %d ticks by player %d" % [i + 1, s.ball_holder]
+			break
+	if line == "":
+		line = "ball popped free to (%.1f, %.1f), untouched while players stood off" % [s.ball_loose.x, s.ball_loose.z]
+		s.sv_players[3].state.pos = Vector2(s.ball_loose.x + 0.5, s.ball_loose.z)    # a player runs onto it
+		s.sv_players[3].state.speed = 0.0
+		s._host_tick(1.0 / 30.0)
+		line += "; then player %d walked up: %s" % [3, "picked it up" if s.ball_kind == NetSession.Ball.HELD and s.ball_holder == 3 else "NOT picked up"]
+	return line
 
 
 func hurdle_dive() -> String:

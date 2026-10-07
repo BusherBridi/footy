@@ -34,7 +34,7 @@ class SvPlayer:
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
 
-const SNAP_STRIDE := 15   # floats per player (id travels in a separate int array)
+const SNAP_STRIDE := 16   # floats per player (id travels in a separate int array)
 
 var mode := Mode.NONE
 var local_id := 0
@@ -61,6 +61,10 @@ var ball_lob := false
 var ball_angle := -1.0           # launch angle (radians) for angle+power throws, -1 for the old model
 var ball_thrower := 0
 var ball_loose := Vector3(0, 0.3, 0)
+var ball_live := false           # a fumble: loose, moving, and anyone nearby picks it up
+var ball_vel := Vector2.ZERO
+var ball_live_age := 0.0
+var fumble_roll := -1.0          # tests: force the fumble dice (0 = always, 1 = never)
 var ball_view: BallView = null
 
 # Local throw control
@@ -291,7 +295,7 @@ func _host_tick(dt: float) -> void:
 		var s := p.state
 		ids.append(id)
 		data.append_array([s.pos.x, s.pos.y, s.heading.x, s.heading.y, s.speed, s.stamina,
-			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, s.juke_timer, p.fx, p.acked])
+			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, s.juke_timer, float(s.spin_side), p.fx, p.acked])
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
@@ -463,6 +467,8 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var balance: float = weight * (float(tk["balance_base"]) + c.speed * balance_factor)
 	var cp: SvPlayer = sv_players[carrier_id]
 	var counter_note := ""
+	var carrier_status: int = c.status
+	var fumble_chance := 0.0
 	if not dive and c.juke_timer > 0.0:
 		# A juke is weak against a close tackle: the plant leaves you off balance.
 		balance -= float(tk["juke_close_penalty"])
@@ -491,14 +497,14 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 			balance += b
 			counter_note += " + truck %.1f" % b
 		AthleteState.Status.SPIN:
-			# Beats a hit from the side (the arm tackle's angle). No help head-on or from behind.
-			if not is_front and not behind and not dive:
-				var b: float = float(tk["spin_bonus"]) * weak_mult
-				balance += b
-				counter_note += " + spin %.1f" % b
+			# Spinning leaves you wide open: a huge balance loss, and a likely fumble.
+			balance -= float(tk["spin_balance_penalty"])
+			fumble_chance = maxf(fumble_chance, float(tk["spin_fumble_chance"]))
+			counter_note += " - spin %.1f" % float(tk["spin_balance_penalty"])
 		AthleteState.Status.HURDLE:
 			# Hit in the air by a defender on their feet: a big hit.
 			if not dive:
+				fumble_chance = maxf(fumble_chance, float(tk["hurdle_fumble_chance"]))
 				balance -= float(tk["hurdle_close_penalty"])
 				counter_note += " - hurdle %.1f" % float(tk["hurdle_close_penalty"])
 	var diff := hit - balance
@@ -531,10 +537,17 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		c.speed = sqrt(2.0 * down_decel * slide)
 		spot = c.pos + c.heading * slide
 		_announce("DRAG %.1f m (%s)" % [slide, detail])
-	# Stand-in for the end of the play: the ball is set down where the carrier ends up.
-	ball_kind = Ball.LOOSE
-	ball_holder = 0
-	ball_loose = Vector3(spot.x, float(Tuning.section("throw")["ball_radius"]), spot.y)
+	if diff >= float(tk["big_hit_margin"]) and not behind:
+		fumble_chance = maxf(fumble_chance, float(tk["big_hit_fumble_chance"]))
+	var roll: float = fumble_roll if fumble_roll >= 0.0 else randf()
+	if roll < fumble_chance:
+		_fumble(carrier_id, spot)
+	else:
+		# Stand-in for the end of the play: the ball is set down where the carrier ends up.
+		ball_kind = Ball.LOOSE
+		ball_holder = 0
+		ball_live = false
+		ball_loose = Vector3(spot.x, float(Tuning.section("throw")["ball_radius"]), spot.y)
 	_after_dive(t, dive)
 
 
@@ -613,6 +626,7 @@ func _sv_counter(id: int, kind: int) -> void:
 	p.state.cut_timer = 0.0
 	if kind == AthleteState.Status.SPIN:
 		p.state.speed *= float(Tuning.section("movement")["spin_speed_mult"])
+		p.state.spin_side = 0
 	_log_event("%s: %s%s" % [_name(id), name, " (weak)" if p.counter_weak else ""])
 
 
@@ -641,6 +655,7 @@ func _sv_take(id: int) -> void:
 		return
 	ball_kind = Ball.HELD
 	ball_holder = id
+	ball_live = false
 
 
 func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> void:
@@ -652,6 +667,7 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 	ball_charge = clampf(charge, 0.0, 1.0)
 	ball_lob = lob
 	ball_angle = angle if angle >= 0.0 else -1.0
+	ball_live = false
 	ball_launch_tick = sv_tick
 	ball_thrower = id
 	ball_kind = Ball.FLIGHT
@@ -659,6 +675,9 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 
 
 func _ball_tick(dt: float) -> void:
+	if ball_kind == Ball.LOOSE and ball_live:
+		_fumble_tick(dt)
+		return
 	if ball_kind != Ball.FLIGHT:
 		return
 	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data, ball_angle)
@@ -693,6 +712,51 @@ func _ball_tick(dt: float) -> void:
 		ball_kind = Ball.LOOSE
 		ball_loose = fl["land"]
 		_log_event("incomplete: ball hit the ground")
+
+
+## A live loose ball slides to a stop; anyone on their feet who gets close picks it up.
+func _fumble_tick(dt: float) -> void:
+	var tk: Dictionary = Tuning.section("tackle")
+	var speed := ball_vel.length()
+	if speed > 0.0:
+		speed = maxf(0.0, speed - float(tk["fumble_friction"]) * dt)
+		ball_vel = ball_vel.normalized() * speed
+		var f: Dictionary = Tuning.section("field")
+		var yard: float = f["yard_m"]
+		var hl: float = (float(f["length_yards"]) * 0.5 + float(f["endzone_yards"])) * yard
+		var hw: float = float(f["width_yards"]) * 0.5 * yard
+		ball_loose.x = clampf(ball_loose.x + ball_vel.x * dt, -hw, hw)
+		ball_loose.z = clampf(ball_loose.z + ball_vel.y * dt, -hl, hl)
+	ball_live_age += dt
+	if ball_live_age < float(tk["fumble_pickup_delay"]):
+		return        # the ball is still popping free
+	var best := 0
+	var best_d := float(tk["fumble_pickup_radius"])
+	for id in sv_players:
+		var p: SvPlayer = sv_players[id]
+		if p.state.status == AthleteState.Status.DOWN:
+			continue
+		var d := p.state.pos.distance_to(Vector2(ball_loose.x, ball_loose.z))
+		if d <= best_d:
+			best_d = d
+			best = id
+	if best != 0:
+		ball_kind = Ball.HELD
+		ball_holder = best
+		ball_live = false
+		_announce("%s recovers the fumble" % _name(best))
+
+
+func _fumble(carrier_id: int, at: Vector2) -> void:
+	var tk: Dictionary = Tuning.section("tackle")
+	var ang := randf() * TAU
+	ball_kind = Ball.LOOSE
+	ball_holder = 0
+	ball_live = true
+	ball_live_age = 0.0
+	ball_vel = Vector2(cos(ang), sin(ang)) * float(tk["fumble_pop_speed"])
+	ball_loose = Vector3(at.x, float(Tuning.section("throw")["ball_radius"]), at.y)
+	_announce("FUMBLE! %s drops the ball" % _name(carrier_id))
 
 
 func _log_event(line: String) -> void:
@@ -775,13 +839,14 @@ func _state_from(a: PackedFloat32Array) -> AthleteState:
 	s.status = int(a[10])
 	s.status_timer = a[11]
 	s.juke_timer = a[12]
+	s.spin_side = int(a[13])
 	return s
 
 
 func _reconcile(a: PackedFloat32Array) -> void:
 	var s := _state_from(a)
-	var ack := int(a[14])
-	cl_fx = int(a[13])
+	var ack := int(a[15])
+	cl_fx = int(a[14])
 	if cl_state == null:
 		cl_state = s
 		cl_prev_pos = s.pos
@@ -913,7 +978,7 @@ func _update_client_visuals(delta: float) -> void:
 		var heading := Vector2(b[2], b[3])
 		var spd: float = b[4]
 		var st := int(b[10])
-		var fx := int(b[13])
+		var fx := int(b[14])
 		var jk: bool = b[12] > 0.0
 		if s0["players"].has(id):
 			var a: PackedFloat32Array = s0["players"][id]

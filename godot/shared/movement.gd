@@ -21,12 +21,26 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 				# A dive that connects is resolved by the referee first; otherwise you hit the ground.
 				s.status = AthleteState.Status.DOWN
 				s.status_timer = tuning["tackle"]["dive_ground_time"]
+			elif s.status == AthleteState.Status.SPIN:
+				# Pop out of the spin to the side chosen with the stick, with a burst of speed.
+				s.heading = s.heading.rotated(s.spin_side * deg_to_rad(m["pop_angle_deg"]))
+				s.speed = maxf(s.speed, run_speed * float(m["pop_speed_mult"]))
+				s.status = AthleteState.Status.POP
+				s.status_timer = m["pop_time"]
+				s.spin_side = 0
 			else:
 				s.status = AthleteState.Status.OK
 				s.status_timer = 0.0
 	var stumbling := s.status == AthleteState.Status.STUMBLE
 	var down := s.status == AthleteState.Status.DOWN
 	var diving := s.status == AthleteState.Status.DIVING
+	var spinning := s.status == AthleteState.Status.SPIN
+	var popping := s.status == AthleteState.Status.POP
+	if spinning and mag >= float(m["spin_side_input"]):
+		# Hold left or right of your running direction to choose the pop side.
+		var side := s.heading.cross(want)
+		if absf(side) >= float(m["spin_side_cross"]):
+			s.spin_side = 1 if side > 0.0 else -1
 	if down:
 		want = Vector2.ZERO
 		mag = 0.0
@@ -36,8 +50,6 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	var top: float = run_speed * (m["sprint_multiplier"] if sprinting else 1.0)
 	if stumbling:
 		top *= m["stumble_speed_mult"]
-	elif s.status == AthleteState.Status.SPIN:
-		top *= m["spin_speed_mult"]
 	elif s.status == AthleteState.Status.TRUCK:
 		top *= m["truck_speed_mult"]
 
@@ -62,8 +74,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if s.cut_timer > 0.0:
 		# Planted: no turning or acceleration for the plant duration.
 		s.cut_timer = maxf(0.0, s.cut_timer - dt)
-	elif diving:
-		pass   # committed: heading and speed are locked until the dive ends
+	elif diving or spinning or popping:
+		pass   # committed: heading and speed are locked until the move ends
 	else:
 		_steer_and_accelerate(s, want, mag, top, dt, m, m["down_stop_time"] if down else m["stop_time"])
 
