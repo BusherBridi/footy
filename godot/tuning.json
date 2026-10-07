@@ -73,11 +73,14 @@
     "ball_radius": 0.3,
     "held_height": 1.2,
     "marker_radius": 1.0,
-    "aim_pitch_short_deg": -5.0,
-    "aim_pitch_far_deg": 40.0,
-    "aim_curve": 1.0,
     "aim_pitch_limit_deg": 60.0,
-    "arc_points": 28
+    "arc_points": 28,
+    "power_gravity": 16.0,
+    "power_speed_min": 14.0,
+    "power_speed_max": 34.0,
+    "angle_min_deg": 3.0,
+    "angle_max_deg": 55.0,
+    "power_charge_time": 1.0
   },
   "bot": {
     "routes_yards": {

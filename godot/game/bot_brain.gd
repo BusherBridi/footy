@@ -104,13 +104,14 @@ func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void
 			_throw_wait -= dt
 			if _throw_wait <= 0.0:
 				_phase = 1
-				_charge_left = rng.randf_range(0.3, 1.0) * float(tuning["throw"]["charge_time"])
+				var ct: float = tuning["throw"]["power_charge_time"] if aim_mode else tuning["throw"]["charge_time"]
+				_charge_left = rng.randf_range(0.2, 1.0) * float(ct)
 				_lob = rng.randf() < 0.5
 				_yaw = rng.randf_range(-0.25, 0.25)   # 0 = straight downfield (-z)
-				_pitch = deg_to_rad(rng.randf_range(float(tuning["throw"]["aim_pitch_short_deg"]), float(tuning["throw"]["aim_pitch_far_deg"])))
+				_pitch = deg_to_rad(rng.randf_range(float(tuning["throw"]["angle_min_deg"]), float(tuning["throw"]["angle_max_deg"])))
 		1:  # hold aim + throw while charging
 			out["aiming"] = true
-			out["throw"] = not aim_mode
+			out["throw"] = true
 			out["yaw"] = _yaw
 			out["lob"] = _lob
 			_aim_fields(out)
@@ -123,7 +124,6 @@ func _qb(out: Dictionary, dt: float, tuning: Dictionary, has_ball: bool) -> void
 			out["yaw"] = _yaw
 			out["lob"] = _lob
 			_aim_fields(out)
-			out["throw_tap"] = aim_mode
 			_phase = 0
 			_throw_wait = rng.randf_range(2.0, 4.0)
 			_take_cd = 4.0   # let the ball fly before grabbing it again

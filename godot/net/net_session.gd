@@ -22,7 +22,7 @@ class SvPlayer:
 	var last_sprint := false
 
 enum Ball { LOOSE, HELD, FLIGHT }
-enum ThrowMode { AIM, HOLD }   # AIM: look up = further, tap to throw. HOLD: charge by holding.
+enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
 
 const SNAP_STRIDE := 11   # floats per player (id travels in a separate int array)
 
@@ -48,6 +48,7 @@ var ball_p0 := Vector3.ZERO
 var ball_yaw := 0.0
 var ball_charge := 0.0
 var ball_lob := false
+var ball_angle := -1.0           # launch angle (radians) for angle+power throws, -1 for the old model
 var ball_thrower := 0
 var ball_loose := Vector3(0, 0.3, 0)
 var ball_view: BallView = null
@@ -59,6 +60,7 @@ var aim_active := false
 var aim_pos := Vector2.ZERO
 var aim_lob := false
 var aim_arc := PackedVector3Array()
+var aim_angle := -1.0
 var latest_holder := 0         # newest holder seen in a snapshot (undelayed)
 var view_ball := {}            # what the delayed view currently shows (for logs/HUD)
 
@@ -251,7 +253,7 @@ func _host_tick(dt: float) -> void:
 			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, p.acked])
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
-		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z])
+		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
 		var tick := sv_tick
@@ -325,9 +327,9 @@ func rpc_take_ball() -> void:
 
 
 @rpc("any_peer", "reliable")
-func rpc_throw(charge: float, yaw: float, lob: bool) -> void:
+func rpc_throw(charge: float, yaw: float, lob: bool, angle: float) -> void:
 	if mode == Mode.HOST:
-		_sv_throw(multiplayer.get_remote_sender_id(), charge, yaw, lob)
+		_sv_throw(multiplayer.get_remote_sender_id(), charge, yaw, lob, angle)
 
 
 # ------------------------------------------------------------------------ ball
@@ -340,7 +342,7 @@ func _sv_take(id: int) -> void:
 	ball_holder = id
 
 
-func _sv_throw(id: int, charge: float, yaw: float, lob: bool) -> void:
+func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> void:
 	if ball_kind != Ball.HELD or ball_holder != id or not sv_players.has(id):
 		return
 	var pos: Vector2 = sv_players[id].state.pos
@@ -348,6 +350,7 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool) -> void:
 	ball_yaw = yaw
 	ball_charge = clampf(charge, 0.0, 1.0)
 	ball_lob = lob
+	ball_angle = angle if angle >= 0.0 else -1.0
 	ball_launch_tick = sv_tick
 	ball_thrower = id
 	ball_kind = Ball.FLIGHT
@@ -357,7 +360,7 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool) -> void:
 func _ball_tick(dt: float) -> void:
 	if ball_kind != Ball.FLIGHT:
 		return
-	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data)
+	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data, ball_angle)
 	var c: Dictionary = Tuning.section("catch")
 	var g: float = Tuning.section("throw")["gravity"]
 	var t_now := (sv_tick - ball_launch_tick) * dt
@@ -403,6 +406,8 @@ func local_has_ball() -> bool:
 
 
 ## Aim, charge and release. Runs once per tick on whoever is playing locally.
+## AIM mode: the camera pitch is the launch angle and holding the throw button sets
+## power. HOLD mode: the old charge-for-distance throw.
 func _ball_input(inp: Dictionary, dt: float) -> void:
 	if inp.get("take", false):
 		if mode == Mode.HOST:
@@ -410,42 +415,49 @@ func _ball_input(inp: Dictionary, dt: float) -> void:
 		else:
 			_send(func(): if cl_connected: rpc_id(1, "rpc_take_ball"))
 
+	var th := Tuning.section("throw")
 	var aiming: bool = inp.get("aiming", false) and local_has_ball()
 	var yaw: float = inp.get("yaw", 0.0)
 	var lob: bool = inp.get("lob", false)
 	var holding: bool = aiming and inp.get("throw", false)
-	if inp.get("mode", ThrowMode.HOLD) == ThrowMode.AIM:
-		throw_charging = false
-		if aiming:
-			throw_charge = BallFlight.charge_from_pitch(inp.get("pitch", 0.0), Tuning.data)
-			if inp.get("throw_tap", false):
-				_do_throw(throw_charge, yaw, lob)
-		else:
-			throw_charge = 0.0
-	elif holding:
-		throw_charge = minf(1.0, throw_charge + dt / float(Tuning.section("throw")["charge_time"]))
+	var power_mode: bool = inp.get("mode", ThrowMode.HOLD) == ThrowMode.AIM
+	var angle := -1.0
+	var charge_time: float = th["charge_time"]
+	if power_mode:
+		angle = clampf(inp.get("pitch", 0.0), deg_to_rad(th["angle_min_deg"]), deg_to_rad(th["angle_max_deg"]))
+		charge_time = th["power_charge_time"]
+
+	if holding:
+		throw_charge = minf(1.0, throw_charge + dt / charge_time)
 		throw_charging = true
 	elif throw_charging:
-		if aiming:
-			_do_throw(throw_charge, yaw, lob)
+		if aiming:   # releasing aim first cancels the throw
+			_do_throw(throw_charge, yaw, lob, angle)
 		throw_charge = 0.0
 		throw_charging = false
+	elif aiming and power_mode and inp.get("throw_tap", false):
+		_do_throw(0.0, yaw, lob, angle)   # a tap shorter than one tick
 	elif not aiming:
 		throw_charge = 0.0
+
 	aim_active = aiming
+	aim_angle = angle
 	aim_lob = lob
 	if aiming:
 		var here := local_state().pos
-		aim_pos = BallFlight.target_for(here, yaw, throw_charge, Tuning.data)
-		var p0 := Vector3(here.x, float(Tuning.section("throw")["release_height"]), here.y)
-		aim_arc = BallFlight.arc_points(p0, yaw, throw_charge, lob, Tuning.data)
+		var p0 := Vector3(here.x, float(th["release_height"]), here.y)
+		var fl := BallFlight.launch(p0, yaw, throw_charge, lob, Tuning.data, angle)
+		aim_pos = Vector2(fl["land"].x, fl["land"].z)
+		aim_arc = BallFlight.arc_points(p0, yaw, throw_charge, lob, Tuning.data, angle)
+		if power_mode:
+			aim_lob = rad_to_deg(angle) >= 30.0   # marker colour only
 
 
-func _do_throw(charge: float, yaw: float, lob: bool) -> void:
+func _do_throw(charge: float, yaw: float, lob: bool, angle: float) -> void:
 	if mode == Mode.HOST:
-		_sv_throw(1, charge, yaw, lob)
+		_sv_throw(1, charge, yaw, lob, angle)
 	else:
-		_send(func(): if cl_connected: rpc_id(1, "rpc_throw", charge, yaw, lob))
+		_send(func(): if cl_connected: rpc_id(1, "rpc_throw", charge, yaw, lob, angle))
 
 
 # -------------------------------------------------------------- reconciliation
@@ -561,7 +573,7 @@ func _update_host_visuals() -> void:
 		var p: SvPlayer = sv_players[id]
 		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
-		ball_loose, sv_tick + a)
+		ball_loose, ball_angle, sv_tick + a)
 
 
 func _update_client_visuals(delta: float) -> void:
@@ -606,11 +618,11 @@ func _update_client_visuals(delta: float) -> void:
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]
 	_show_ball(bi[0], bi[1], bi[2], Vector3(bf[0], bf[1], bf[2]), bf[3], bf[4], bf[5] > 0.5,
-		Vector3(bf[6], bf[7], bf[8]), render_tick)
+		Vector3(bf[6], bf[7], bf[8]), bf[9], render_tick)
 
 
 func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: float, charge: float,
-		lob: bool, loose: Vector3, tick_f: float) -> void:
+		lob: bool, loose: Vector3, angle: float, tick_f: float) -> void:
 	var th := Tuning.section("throw")
 	var pos := loose
 	var landing_on := false
@@ -618,7 +630,7 @@ func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: floa
 	if kind == Ball.HELD and athletes.has(holder):
 		pos = athletes[holder].position + Vector3(0, float(th["held_height"]), 0)
 	elif kind == Ball.FLIGHT:
-		var fl := BallFlight.launch(p0, yaw, charge, lob, Tuning.data)
+		var fl := BallFlight.launch(p0, yaw, charge, lob, Tuning.data, angle)
 		pos = BallFlight.position_at(p0, fl, float(th["gravity"]), (tick_f - launch_tick) * _tick_dt())
 		landing_on = true
 		land = fl["land"]

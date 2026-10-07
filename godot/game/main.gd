@@ -9,6 +9,7 @@ var camera := ChaseCamera.new()
 var session := NetSession.new()
 var brain: BotBrain = null
 var hud := Label.new()
+var reticle := PowerReticle.new()
 var menu := VBoxContainer.new()
 var ip_edit := LineEdit.new()
 var status := Label.new()
@@ -139,6 +140,8 @@ func _build_world() -> void:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	reticle.visible = false
+	layer.add_child(reticle)
 	hud.position = Vector2(12, 8)
 	hud.add_theme_font_size_override("font_size", 18)
 	layer.add_child(hud)
@@ -186,9 +189,12 @@ func _physics_process(_delta: float) -> void:
 func _process(_delta: float) -> void:
 	camera.set_qb(session.local_has_ball())
 	camera.set_aiming(session.aim_active)
+	reticle.visible = session.aim_active
+	reticle.power = session.throw_charge
+	reticle.show_hint = session.throw_charging
+	reticle.angle_deg = rad_to_deg(session.aim_angle) if session.aim_angle >= 0.0 else rad_to_deg(camera.pitch)
 	var s := session.local_state()
 	var n := Tuning.section("net")
-	var n_throw := Tuning.section("throw")
 	var role := "offline"
 	if session.mode == NetSession.Mode.HOST:
 		role = "HOST"
@@ -197,9 +203,9 @@ func _process(_delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   throw mode: %s   range %d m   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim (look up = further), LMB/RT tap to throw, Q/RB bullet-lob, C camera, F2 throw mode" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add test bot, V remove bots\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-",
-		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "LOB" if lob else "BULLET",
-		"AIM (look up = further, tap)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge)",
-		int(lerpf(n_throw["min_range"], n_throw["max_range"], session.throw_charge)), camera.profile_name()]
+		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),
+		"ANGLE+POWER (look = angle, hold = power)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge = distance)",
+		int(session.throw_charge * 100.0), camera.profile_name()]
