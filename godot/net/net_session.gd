@@ -24,7 +24,8 @@ class SvPlayer:
 	var tackle_cd := 0.0
 	var dive_cd := 0.0
 	var stiff_timer := 0.0       # >0: a stiff arm is active (the carrier's counter window)
-	var stiff_cd := 0.0
+	var counter_cd := 0.0         # shared by every carrier counter
+	var counter_weak := false    # a status counter (spin, truck, hurdle) thrown on an empty bar
 	var stiff_weak := false      # fired with too little stamina
 	var fx := 0                  # visual cue: 1 = stiff arm out
 	var dodged := false          # this dive was already juked past (announce once)
@@ -234,6 +235,10 @@ func _host_tick(dt: float) -> void:
 		_sv_tackle(1)
 	if inp.get("dive", false):
 		_sv_dive(1)
+	if inp.get("truck", false):
+		_sv_counter(1, AthleteState.Status.TRUCK)
+	if inp.get("hurdle", false):
+		_sv_counter(1, AthleteState.Status.HURDLE)
 	var me: SvPlayer = sv_players[1]
 	me.last_seq += 1
 	me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
@@ -242,7 +247,7 @@ func _host_tick(dt: float) -> void:
 		var q: SvPlayer = sv_players[id]
 		q.tackle_cd = maxf(0.0, q.tackle_cd - dt)
 		q.dive_cd = maxf(0.0, q.dive_cd - dt)
-		q.stiff_cd = maxf(0.0, q.stiff_cd - dt)
+		q.counter_cd = maxf(0.0, q.counter_cd - dt)
 		q.stiff_timer = maxf(0.0, q.stiff_timer - dt)
 		q.fx_timer = maxf(0.0, q.fx_timer - dt)
 		if q.fx_timer <= 0.0:
@@ -305,6 +310,10 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle"))
 	if inp.get("dive", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
+	if inp.get("truck", false):
+		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.TRUCK))
+	if inp.get("hurdle", false):
+		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.HURDLE))
 	var move: Vector2 = inp["move"]
 	var sprint: bool = inp["sprint"]
 	cl_seq += 1
@@ -384,6 +393,12 @@ func rpc_dive() -> void:
 		_sv_dive(multiplayer.get_remote_sender_id())
 
 
+@rpc("any_peer", "reliable")
+func rpc_counter(kind: int) -> void:
+	if mode == Mode.HOST:
+		_sv_counter(multiplayer.get_remote_sender_id(), kind)
+
+
 @rpc("authority", "reliable")
 func rpc_event(text: String) -> void:
 	_log_event("(event received) " + text)
@@ -436,7 +451,7 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	var facing := c.heading.dot(to_tackler)      # +1: tackler is in front of the carrier
 	var closing := maxf(0.0, (t.heading * t.speed).dot(-to_tackler))
 	var behind: bool = facing <= float(tk["behind_cos"])
-	var balance_factor := 1.0
+	var balance_factor: float = tk["head_on_balance_factor"]
 	if behind:
 		balance_factor = tk["behind_balance_factor"]
 	elif facing < float(tk["front_cos"]):
@@ -457,12 +472,35 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		# and weaker still when it was thrown with an empty stamina bar.
 		var bonus: float = tk["stiff_bonus"]
 		if cp.stiff_weak:
-			bonus *= float(tk["stiff_weak_mult"])
+			bonus *= float(tk["counter_weak_mult"])
 		if facing < float(tk["front_cos"]):
 			bonus *= float(tk["stiff_side_mult"])
 		balance += bonus
-		counter_note = " + stiff arm %.1f" % bonus
+		counter_note += " + stiff arm %.1f" % bonus
 		cp.stiff_timer = 0.0
+	var is_front: bool = facing >= float(tk["front_cos"])
+	var weak_mult: float = tk["counter_weak_mult"] if cp.counter_weak else 1.0
+	match c.status:
+		AthleteState.Status.TRUCK:
+			# Beats close tackles and head-on hits. A big bonus from the front, easy to hit from the side.
+			var b: float = float(tk["truck_bonus"]) * weak_mult
+			if behind:
+				b = 0.0
+			elif not is_front:
+				b *= float(tk["truck_side_mult"])
+			balance += b
+			counter_note += " + truck %.1f" % b
+		AthleteState.Status.SPIN:
+			# Beats a hit from the side (the arm tackle's angle). No help head-on or from behind.
+			if not is_front and not behind and not dive:
+				var b: float = float(tk["spin_bonus"]) * weak_mult
+				balance += b
+				counter_note += " + spin %.1f" % b
+		AthleteState.Status.HURDLE:
+			# Hit in the air by a defender on their feet: a big hit.
+			if not dive:
+				balance -= float(tk["hurdle_close_penalty"])
+				counter_note += " - hurdle %.1f" % float(tk["hurdle_close_penalty"])
 	var diff := hit - balance
 	var angle_name := "from behind" if behind else ("head-on" if facing >= float(tk["front_cos"]) else "from the side")
 	var detail := "%s %s %s: hit %.1f vs balance %.1f%s" % [_name(tackler_id), "dove" if dive else "hit", angle_name, hit, balance, counter_note]
@@ -509,7 +547,12 @@ func _after_dive(t: AthleteState, dive: bool) -> void:
 
 func _sv_dive(id: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.state.status != AthleteState.Status.OK or p.dive_cd > 0.0:
+	if p == null or p.state.status != AthleteState.Status.OK:
+		return
+	if ball_kind == Ball.HELD and ball_holder == id:
+		_sv_counter(id, AthleteState.Status.SPIN)     # same button: with the ball it's a spin
+		return
+	if p.dive_cd > 0.0:
 		return
 	var tk: Dictionary = Tuning.section("tackle")
 	p.dive_cd = tk["dive_cooldown"]
@@ -531,22 +574,54 @@ func _check_dives() -> void:
 		if id == ball_holder or p.state.status != AthleteState.Status.DIVING:
 			continue
 		if p.state.pos.distance_to(carrier.state.pos) <= float(tk["dive_hit_radius"]):
-			if carrier.state.juke_timer > 0.0:
-				# A well-timed juke beats a dive: the diver sails through and hits the ground.
+			var hurdled: bool = carrier.state.status == AthleteState.Status.HURDLE and not carrier.counter_weak
+			if carrier.state.juke_timer > 0.0 or hurdled:
+				# A well-timed juke or hurdle beats a dive: the diver sails through and hits the ground.
 				if not p.dodged:
 					p.dodged = true
-					_announce("JUKED! %s dove past %s" % [_name(id), _name(ball_holder)])
+					_announce("%s! %s dove past %s" % ["HURDLED" if hurdled else "JUKED", _name(id), _name(ball_holder)])
 				continue
 			_resolve_tackle(id, ball_holder, true)
 			return
 
 
-func _sv_stiffarm(id: int) -> void:
+## Carrier counters that put you in a movement state: spin, truck, hurdle.
+func _sv_counter(id: int, kind: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.stiff_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+	if p == null or p.counter_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+		return
+	if ball_kind != Ball.HELD or ball_holder != id:
 		return
 	var tk: Dictionary = Tuning.section("tackle")
-	p.stiff_cd = tk["stiff_cooldown"]
+	var name := ""
+	var time := 0.0
+	var cost := 0.0
+	match kind:
+		AthleteState.Status.SPIN:
+			name = "spin"; time = tk["spin_time"]; cost = tk["spin_cost"]
+		AthleteState.Status.TRUCK:
+			name = "truck"; time = tk["truck_time"]; cost = tk["truck_cost"]
+		AthleteState.Status.HURDLE:
+			name = "hurdle"; time = tk["hurdle_time"]; cost = tk["hurdle_cost"]
+		_:
+			return
+	p.counter_cd = tk["counter_cooldown"]
+	p.counter_weak = p.state.stamina < cost
+	p.state.stamina = maxf(0.0, p.state.stamina - cost)
+	p.state.status = kind
+	p.state.status_timer = time
+	p.state.cut_timer = 0.0
+	if kind == AthleteState.Status.SPIN:
+		p.state.speed *= float(Tuning.section("movement")["spin_speed_mult"])
+	_log_event("%s: %s%s" % [_name(id), name, " (weak)" if p.counter_weak else ""])
+
+
+func _sv_stiffarm(id: int) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or p.counter_cd > 0.0 or p.state.status != AthleteState.Status.OK:
+		return
+	var tk: Dictionary = Tuning.section("tackle")
+	p.counter_cd = tk["counter_cooldown"]
 	p.stiff_timer = tk["stiff_window"]
 	p.stiff_weak = p.state.stamina < float(tk["stiff_cost"])
 	p.state.stamina = maxf(0.0, p.state.stamina - float(tk["stiff_cost"]))

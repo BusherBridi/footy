@@ -3,7 +3,7 @@ extends RefCounted
 ## Everything the movement step needs. Plain data so it can be copied for
 ## client prediction and replayed on the server.
 
-enum Status { OK, STUMBLE, DOWN, DIVING }
+enum Status { OK, STUMBLE, DOWN, DIVING, SPIN, TRUCK, HURDLE }
 
 var pos := Vector2.ZERO          # x, z on the field plane (metres)
 var heading := Vector2(0, -1)    # unit direction of travel / facing

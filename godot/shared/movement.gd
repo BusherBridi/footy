@@ -31,10 +31,15 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 		want = Vector2.ZERO
 		mag = 0.0
 
-	var sprinting: bool = sprint and s.stamina > 0.0 and mag > 0.1 and s.status == AthleteState.Status.OK
+	var sprint_ok := s.status == AthleteState.Status.OK or s.status == AthleteState.Status.HURDLE
+	var sprinting: bool = sprint and s.stamina > 0.0 and mag > 0.1 and sprint_ok
 	var top: float = run_speed * (m["sprint_multiplier"] if sprinting else 1.0)
 	if stumbling:
 		top *= m["stumble_speed_mult"]
+	elif s.status == AthleteState.Status.SPIN:
+		top *= m["spin_speed_mult"]
+	elif s.status == AthleteState.Status.TRUCK:
+		top *= m["truck_speed_mult"]
 
 	# Cut: a hard stick flick makes a brief plant that keeps part of your speed.
 	if m["cut_enabled"] and s.status == AthleteState.Status.OK and s.cut_timer <= 0.0 and s.cut_cooldown <= 0.0 \

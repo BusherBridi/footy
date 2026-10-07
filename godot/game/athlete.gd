@@ -70,4 +70,13 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		tilt = -1.15
 	elif status == AthleteState.Status.STUMBLE:
 		tilt = -0.35
-	rotation = Vector3(tilt, atan2(-heading.x, -heading.y), 0.35 if juke else 0.0)
+	elif status == AthleteState.Status.TRUCK:
+		tilt = -0.55          # head down, driving forward
+	elif status == AthleteState.Status.HURDLE:
+		tilt = -0.3
+	var yaw := atan2(-heading.x, -heading.y)
+	if status == AthleteState.Status.SPIN:
+		yaw += Time.get_ticks_msec() / 60.0     # a visible spin
+	rotation = Vector3(tilt, yaw, 0.35 if juke else 0.0)
+	if status == AthleteState.Status.HURDLE:
+		position.y = 0.9                         # up and over

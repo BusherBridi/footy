@@ -40,7 +40,56 @@ func _ready():
 	print("%-46s %s" % ["hard flick with nearly empty stamina", flick(0.05)])
 	print("%-46s %s" % ["dive at a carrier whose juke is live", dive(Vector2(0, -2.5), Vector2(0, 1), false, 0.3)])
 	print("%-46s %s" % ["close tackle while juke is live (weak)", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, false, 0.3)])
+	print()
+	print("%-46s %s" % ["passive momentum + new counters", "result"])
+	print("%-46s %s" % ["standing defender vs sprinting carrier", t(Vector2(0, -1.2), Vector2(0, 1), 0.0, sprint)])
+	print("%-46s %s" % ["jogging defender vs jogging carrier", t(Vector2(0, -1.2), Vector2(0, 1), run, run)])
+	print("%-46s %s" % ["charging sprinter vs sprinting carrier", t(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint)])
+	print("%-46s %s" % ["TRUCK vs standing defender", cnt(AthleteState.Status.TRUCK, Vector2(0, -1.2), Vector2(0, 1), 0.0, sprint, 1.0)])
+	print("%-46s %s" % ["TRUCK vs charging sprinter, head-on", cnt(AthleteState.Status.TRUCK, Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0)])
+	print("%-46s %s" % ["TRUCK vs hit from the side", cnt(AthleteState.Status.TRUCK, Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0)])
+	print("%-46s %s" % ["TRUCK with empty stamina, head-on sprinter", cnt(AthleteState.Status.TRUCK, Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 0.05)])
+	print("%-46s %s" % ["SPIN vs hit from the side", cnt(AthleteState.Status.SPIN, Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0)])
+	print("%-46s %s" % ["no spin, same hit from the side", t(Vector2(1.2, 0), Vector2(-1, 0), sprint, run * 0.7)])
+	print("%-46s %s" % ["SPIN vs head-on hit (no help)", cnt(AthleteState.Status.SPIN, Vector2(0, -1.2), Vector2(0, 1), sprint, run, 1.0)])
+	print("%-46s %s" % ["HURDLE vs a tackler on their feet", cnt(AthleteState.Status.HURDLE, Vector2(0, -1.2), Vector2(0, 1), 0.0, run, 1.0)])
+	print("%-46s %s" % ["HURDLE vs a dive", hurdle_dive()])
+	print("%-46s %s" % ["counter cooldown (spin then truck at once)", counter_cd()])
 	get_tree().quit()
+
+
+## Carrier uses a counter, then the tackler presses tackle.
+func cnt(kind: int, tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float) -> String:
+	reset(tp, th, tspeed, cspeed)
+	var c: AthleteState = s.sv_players[2].state
+	c.stamina = stamina
+	var speed_before := c.speed
+	s._sv_counter(2, kind)
+	var out: Array = []
+	s.event_text.connect(func(x): out.append(x), CONNECT_ONE_SHOT)
+	s._sv_tackle(3)
+	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]]
+
+
+func hurdle_dive() -> String:
+	reset(Vector2(0, -2.5), Vector2(0, 1), 7.0, 0.0)
+	s.sv_players[2].state.speed = 7.0
+	s._sv_counter(2, AthleteState.Status.HURDLE)
+	s._sv_dive(3)
+	var out: Array = []
+	s.event_text.connect(func(x): out.append(x), CONNECT_ONE_SHOT)
+	for i in 20:
+		s._host_tick(1.0 / 30.0)
+	return "%s" % (out[0] if out.size() > 0 else "(no event)")
+
+
+func counter_cd() -> String:
+	reset(Vector2(0, -5), Vector2(0, 1), 0.0, 7.0)
+	s._sv_counter(2, AthleteState.Status.SPIN)
+	var after_first: int = s.sv_players[2].state.status
+	s.sv_players[2].state.status = 0     # pretend the spin ended at once
+	s._sv_counter(2, AthleteState.Status.TRUCK)
+	return "second counter ignored while cooling down: %s" % (s.sv_players[2].state.status == 0)
 
 
 func reset(tp: Vector2, th: Vector2, tspeed: float, cspeed: float) -> void:
@@ -68,7 +117,7 @@ func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, 
 	var out: Array = []
 	s.event_text.connect(func(x): out.append(x), CONNECT_ONE_SHOT)
 	s._sv_tackle(3)
-	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ["ok", "stumble", "down", "diving"][c.status]]
+	return "%s -> carrier %s" % [out[0] if out.size() > 0 else "(none)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]]
 
 
 func stiff_twice() -> String:
@@ -92,8 +141,8 @@ func dive(tp: Vector2, th: Vector2, hits: bool, juke := 0.0) -> String:
 	for i in 60:
 		s._host_tick(1.0 / 30.0)
 		if i == 5 or i == 20 or i == 45:
-			trace += " | t=%.1fs diver %s" % [(i + 1) / 30.0, ["ok", "stumble", "down", "diving"][d.status]]
-	return "%s -> carrier %s%s" % [out[0] if out.size() > 0 else "(no hit)", ["ok", "stumble", "down", "diving"][c.status], trace]
+			trace += " | t=%.1fs diver %s" % [(i + 1) / 30.0, ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][d.status]]
+	return "%s -> carrier %s%s" % [out[0] if out.size() > 0 else "(no hit)", ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status], trace]
 
 
 ## tp: tackler position relative to carrier, th: tackler heading.
@@ -121,7 +170,7 @@ func t(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, twice := false) -
 		s._sv_tackle(3)
 		return "second press ignored: %s" % (s.sv_players[3].tackle_cd > 0.0 and out.size() == n_before)
 	var res: String = out[0] if out.size() > 0 else "(no event)"
-	var carrier_state: String = ["ok", "stumble", "down", "diving"][c.status]
+	var carrier_state: String = ["ok", "stumble", "down", "diving", "spin", "truck", "hurdle"][c.status]
 	return "%s -> carrier %s, ball %s" % [res, carrier_state, ["loose", "held", "flight"][s.ball_kind]]
 
 
