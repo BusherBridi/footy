@@ -20,6 +20,7 @@ var _throw_latch := false
 var _tackle_latch := false
 var _dive_latch := false
 var _truck_latch := false
+var _strip_latch := false
 var _hurdle_latch := false
 var event_label := Label.new()
 var _event_time := 0.0
@@ -120,6 +121,8 @@ func _provide_input() -> Dictionary:
 	_dive_latch = false
 	var truck := _truck_latch
 	_truck_latch = false
+	var strip := _strip_latch
+	_strip_latch = false
 	var hurdle := _hurdle_latch
 	_hurdle_latch = false
 	return {
@@ -136,6 +139,7 @@ func _provide_input() -> Dictionary:
 		"tackle": tackle,
 		"dive": dive,
 		"truck": truck,
+		"strip": strip,
 		"hurdle": hurdle,
 	}
 
@@ -201,6 +205,8 @@ func _physics_process(_delta: float) -> void:
 		Tuning.reload()
 	if Input.is_action_just_pressed("tackle"):
 		_tackle_latch = true
+	if Input.is_action_just_pressed("strip"):
+		_strip_latch = true
 	if Input.is_action_just_pressed("truck"):
 		_truck_latch = true
 	if Input.is_action_just_pressed("hurdle"):
@@ -244,7 +250,7 @@ func _process(delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive.  With the ball: F/X stiff arm, G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive, R/Y strip (help a wrap).  With the ball: F/X stiff arm, G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING"][int(s.status)],
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),

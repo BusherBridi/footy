@@ -24,6 +24,7 @@ var _rest := 0.0
 var _returning := false
 
 var _take_cd := 0.0
+var _strip_roll := -1            # -1 = undecided, 0 tackle, 1 strip
 var _dive_roll := -1            # -1 = undecided for this approach, 0 no, 1 yes
 var _throw_wait := 2.0
 var _phase := 0                 # 0 wait, 1 charging, 2 release
@@ -66,9 +67,19 @@ func _chase(out: Dictionary, pos: Vector2, tuning: Dictionary, ctx: Dictionary) 
 		var h: Vector2 = ctx["heading"]
 		facing_ok = rad_to_deg(absf(h.angle_to(cp - pos))) <= float(tuning["bot"]["chase_face_deg"])
 	if dist <= float(tuning["bot"]["chase_trigger_m"]) and facing_ok:
-		out["tackle"] = true
+		if ctx.get("carrier_wrapped", false):
+			# Joining a wrap: sometimes go for the ball instead of the tackle.
+			if _strip_roll < 0:
+				_strip_roll = 1 if rng.randf() < float(tuning["bot"]["strip_chance"]) else 0
+			if _strip_roll == 1:
+				out["strip"] = true
+			else:
+				out["tackle"] = true
+		else:
+			out["tackle"] = true
 	elif dist > float(tuning["bot"]["dive_trigger_m"]) + 2.0:
 		_dive_roll = -1
+		_strip_roll = -1
 	elif dist <= float(tuning["bot"]["dive_trigger_m"]):
 		if _dive_roll < 0:
 			_dive_roll = 1 if rng.randf() < float(tuning["bot"]["dive_chance"]) else 0

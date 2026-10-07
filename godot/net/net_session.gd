@@ -243,6 +243,8 @@ func _host_tick(dt: float) -> void:
 		_sv_tackle(1)
 	if inp.get("dive", false):
 		_sv_dive(1)
+	if inp.get("strip", false):
+		_sv_strip(1)
 	if inp.get("truck", false):
 		_sv_counter(1, AthleteState.Status.TRUCK)
 	if inp.get("hurdle", false):
@@ -264,6 +266,7 @@ func _host_tick(dt: float) -> void:
 		var bp: SvPlayer = sv_players[id]
 		var ctx := {"heading": bp.state.heading, "holding": bp.wrap_of != 0}
 		if ball_kind == Ball.HELD and ball_holder != id and sv_players.has(ball_holder):
+			ctx["carrier_wrapped"] = sv_players[ball_holder].wrap_holder != 0
 			var cs: AthleteState = sv_players[ball_holder].state
 			ctx["carrier"] = cs.pos
 			ctx["carrier_vel"] = cs.heading * cs.speed
@@ -274,6 +277,8 @@ func _host_tick(dt: float) -> void:
 			_sv_tackle(id)
 		if bi.get("dive", false):
 			_sv_dive(id)
+		if bi.get("strip", false):
+			_sv_strip(id)
 
 	var max_q: int = int(_net()["max_input_queue"])
 	for id in sv_players:
@@ -319,6 +324,8 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle"))
 	if inp.get("dive", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
+	if inp.get("strip", false):
+		_send(func(): if cl_connected: rpc_id(1, "rpc_strip"))
 	if inp.get("truck", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.TRUCK))
 	if inp.get("hurdle", false):
@@ -400,6 +407,12 @@ func rpc_tackle() -> void:
 func rpc_dive() -> void:
 	if mode == Mode.HOST:
 		_sv_dive(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "reliable")
+func rpc_strip() -> void:
+	if mode == Mode.HOST:
+		_sv_strip(multiplayer.get_remote_sender_id())
 
 
 @rpc("any_peer", "reliable")
@@ -681,6 +694,34 @@ func _check_dives() -> void:
 				continue
 			_resolve_tackle(id, ball_holder, true)
 			return
+
+
+## A joining defender rips at the ball instead of adding hit power. The more tired the
+## carrier, the better the odds. A failed strip does nothing (their hit never counts).
+func _sv_strip(id: int) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
+		return
+	if ball_kind != Ball.HELD or ball_holder == id or not sv_players.has(ball_holder):
+		return
+	var cp: SvPlayer = sv_players[ball_holder]
+	var tk: Dictionary = Tuning.section("tackle")
+	if cp.wrap_holder == 0 or cp.wrap_holder == id:
+		return        # only a joiner, and only on a carrier who is already wrapped up
+	if p.state.pos.distance_to(cp.state.pos) > float(tk["strip_reach"]):
+		return
+	p.tackle_cd = tk["strip_cooldown"]
+	var chance := lerpf(float(tk["strip_chance_empty"]), float(tk["strip_chance_full"]), clampf(cp.state.stamina, 0.0, 1.0))
+	var roll: float = fumble_roll if fumble_roll >= 0.0 else randf()
+	if roll < chance:
+		var cid := ball_holder
+		_end_wrap(cid, false)
+		cp.state.status = AthleteState.Status.STUMBLE
+		cp.state.status_timer = tk["strip_carrier_stumble"]
+		_announce("STRIPPED! %s rips it from %s (%d%% chance)" % [_name(id), _name(cid), int(chance * 100.0)])
+		_fumble(cid, cp.state.pos)
+	else:
+		_announce("%s tried to strip it and failed (%d%% chance)" % [_name(id), int(chance * 100.0)])
 
 
 ## Carrier counters that put you in a movement state: spin, truck, hurdle.

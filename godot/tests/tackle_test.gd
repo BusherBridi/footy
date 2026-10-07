@@ -78,6 +78,15 @@ func _ready():
 	print("%-46s %s" % ["stiff arm shoves the holder off", wrap_break(4)])
 	print("%-46s %s" % ["stiff arm with empty stamina fails", wrap_break(5)])
 	print("%-46s %s" % ["holder lets go (presses tackle again)", wrap_break(6)])
+	print()
+	print("%-46s %s" % ["strips", "result"])
+	print("%-46s %s" % ["fresh carrier, roll 0.10 (chance 15%)", strip_case(1.0, 0.10, 4)])
+	print("%-46s %s" % ["fresh carrier, roll 0.20 (chance 15%)", strip_case(1.0, 0.20, 4)])
+	print("%-46s %s" % ["tired carrier (10%), roll 0.50", strip_case(0.1, 0.50, 4)])
+	print("%-46s %s" % ["the holder tries to strip (not a joiner)", strip_case(1.0, 0.0, 3)])
+	print("%-46s %s" % ["strip with nobody holding the carrier", strip_case(1.0, 0.0, 4, false)])
+	print("%-46s %s" % ["joiner too far away", strip_case(1.0, 0.0, 4, true, 4.0)])
+	print("%-46s %s" % ["strip twice (cooldown)", strip_twice()])
 	print("%-46s %s" % ["HURDLE vs a tackler on their feet", cnt(AthleteState.Status.HURDLE, Vector2(0, -1.2), Vector2(0, 1), 0.0, run, 1.0)])
 	print("%-46s %s" % ["HURDLE vs a dive", hurdle_dive()])
 	print("%-46s %s" % ["counter cooldown (spin then truck at once)", counter_cd()])
@@ -336,3 +345,34 @@ func wrap_break(kind: int) -> String:
 			s.sv_players[3].tackle_cd = 0.0
 			s._sv_tackle(3)
 	return "%s -> carrier %s, holder %s" % [str(out[-1]), ST[c.status], ST[h.status]]
+
+
+func strip_case(stamina: float, roll: float, striper: int, wrapped := true, dist := 0.8) -> String:
+	if wrapped:
+		wrap_start()
+	else:
+		reset(Vector2(0, -1.2), Vector2(0, 1), 0.0, 0.0)
+	s._add_sv_player(4)
+	var c: AthleteState = s.sv_players[2].state
+	c.stamina = stamina
+	s.sv_players[4].state.pos = Vector2(dist, 0.0)
+	s.sv_players[4].state.status = 0
+	s.sv_players[striper].tackle_cd = 0.0
+	s.fumble_roll = roll
+	var out := ev_capture()
+	s._sv_strip(striper)
+	s.fumble_roll = -1.0
+	var first: String = str(out[0]).split(" (")[0] if out.size() > 0 else "(ignored)"
+	return "%s -> carrier %s, ball %s%s" % [first, ST[c.status], ["loose", "held", "flight"][s.ball_kind], " (LIVE)" if s.ball_live else ""]
+
+
+func strip_twice() -> String:
+	wrap_start()
+	s._add_sv_player(4)
+	s.sv_players[4].state.pos = Vector2(0.8, 0.0)
+	s.fumble_roll = 0.9      # always fails
+	var out := ev_capture()
+	s._sv_strip(4)
+	s._sv_strip(4)
+	s.fumble_roll = -1.0
+	return "%d strip attempt(s) resolved from two presses" % out.size()

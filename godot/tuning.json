@@ -149,7 +149,8 @@
     "chase_lead_s": 0.25,
     "dive_trigger_m": 3.2,
     "dive_chance": 0.5,
-    "chase_face_deg": 60.0
+    "chase_face_deg": 60.0,
+    "strip_chance": 0.4
   },
   "catch": {
     "radius": 1.2,
@@ -218,6 +219,11 @@
     "takedown_speed": 4.0,
     "join_hit_factor": 1.0,
     "wrap_offset": 0.9,
-    "wrap_max_time": 6.0
+    "wrap_max_time": 6.0,
+    "strip_reach": 1.8,
+    "strip_chance_full": 0.15,
+    "strip_chance_empty": 0.85,
+    "strip_cooldown": 1.0,
+    "strip_carrier_stumble": 0.5
   }
 }
