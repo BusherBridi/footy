@@ -28,6 +28,10 @@ func _ready():
 	print("%-46s %s" % ["tackle cooldown (second press)", t(Vector2(0, -1.2), Vector2(0, 1), sprint, run, true)])
 	print()
 	print("%-46s %s" % ["stiff arm + dive cases", "result"])
+	print("%-46s %s" % ["side hit from the RIGHT, arm out RIGHT", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, true, 0.0, 1)])
+	print("%-46s %s" % ["side hit from the RIGHT, arm out LEFT", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, true, 0.0, -1)])
+	print("%-46s %s" % ["side hit from the LEFT, arm out LEFT", st(Vector2(-1.2, 0), Vector2(1, 0), sprint, run, 1.0, true, 0.0, -1)])
+	print("%-46s %s" % ["side hit from the RIGHT, no side chosen", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, true, 0.0, 0)])
 	print("%-46s %s" % ["head-on sprint, stiff arm timed (weak)", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, true)])
 	print("%-46s %s" % ["side hit sprint, NO stiff arm", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, false)])
 	print("%-46s %s" % ["from behind, stiff arm timed (no help)", st(Vector2(0, 1.2), Vector2(0, -1), sprint, run, 1.0, true)])
@@ -186,12 +190,12 @@ func reset(tp: Vector2, th: Vector2, tspeed: float, cspeed: float) -> void:
 	s.ball_holder = 2
 
 
-func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, timed: bool, juke := 0.0) -> String:
+func st(tp: Vector2, th: Vector2, tspeed: float, cspeed: float, stamina: float, timed: bool, juke := 0.0, side := 0) -> String:
 	reset(tp, th, tspeed, cspeed)
 	s.sv_players[2].state.juke_timer = juke
 	var c: AthleteState = s.sv_players[2].state
 	c.stamina = stamina
-	s._sv_stiffarm(2)
+	s._sv_stiffarm(2, side)
 	if not timed:
 		s.sv_players[2].stiff_timer = 0.0     # window not open when contact happens
 	var out: Array = []

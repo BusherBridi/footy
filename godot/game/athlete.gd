@@ -56,7 +56,10 @@ func set_color(c: Color) -> void:
 
 
 func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false) -> void:
-	_arm.visible = fx == 1
+	_arm.visible = fx >= 1
+	_arm.position.x = 0.0 if fx == 1 else (-0.7 if fx == 2 else 0.7)
+	_arm.position.z = -0.85 if fx == 1 else -0.35
+	_arm.rotation.y = 0.0 if fx == 1 else (0.9 if fx == 2 else -0.9)
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
 	if show:

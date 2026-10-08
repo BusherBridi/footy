@@ -31,6 +31,7 @@ class SvPlayer:
 	var counter_cd := 0.0         # shared by every carrier counter
 	var counter_weak := false    # a status counter (spin, truck, hurdle) thrown on an empty bar
 	var stiff_weak := false      # fired with too little stamina
+	var stiff_side := 0          # which flank the arm covers: -1 left, 0 either (weaker), +1 right
 	var fx := 0                  # visual cue: 1 = stiff arm out
 	var dodged := false          # this dive was already juked past (announce once)
 	var fx_timer := 0.0
@@ -241,7 +242,7 @@ func _host_tick(dt: float) -> void:
 	var inp := _sample_input()
 	_ball_input(inp, dt)
 	if inp.get("tackle", false):
-		_sv_tackle(1)
+		_sv_tackle(1, _stick_side(inp))
 	if inp.get("dive", false):
 		_sv_dive(1)
 	if inp.get("lateral", false):
@@ -324,7 +325,8 @@ func _client_tick(dt: float) -> void:
 	var inp := _sample_input()
 	_ball_input(inp, dt)
 	if inp.get("tackle", false):
-		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle"))
+		var tk_side := _stick_side(inp)
+		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle", tk_side))
 	if inp.get("dive", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
 	if inp.get("lateral", false):
@@ -404,9 +406,21 @@ func rpc_throw(charge: float, yaw: float, lob: bool, angle: float) -> void:
 
 
 @rpc("any_peer", "reliable")
-func rpc_tackle() -> void:
+func rpc_tackle(side: int) -> void:
 	if mode == Mode.HOST:
-		_sv_tackle(multiplayer.get_remote_sender_id())
+		_sv_tackle(multiplayer.get_remote_sender_id(), clampi(side, -1, 1))
+
+
+## Which flank the stick points to, relative to the way you're running (-1 left, 0 neither, +1 right).
+func _stick_side(inp: Dictionary) -> int:
+	var m: Dictionary = Tuning.section("movement")
+	var mv: Vector2 = inp.get("move", Vector2.ZERO)
+	if mv.length() < float(m["spin_side_input"]):
+		return 0
+	var cr := local_state().heading.cross(mv.normalized())
+	if absf(cr) < float(m["spin_side_cross"]):
+		return 0
+	return 1 if cr > 0.0 else -1
 
 
 @rpc("any_peer", "reliable")
@@ -451,7 +465,7 @@ func _announce(text: String) -> void:
 
 ## The referee for a close-tackle press. Only the ball carrier can be tackled; pressing
 ## it at anyone else (or at nothing) is a committed whiff.
-func _sv_tackle(id: int) -> void:
+func _sv_tackle(id: int, side := 0) -> void:
 	var p: SvPlayer = sv_players.get(id)
 	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
 		return
@@ -464,7 +478,7 @@ func _sv_tackle(id: int) -> void:
 			_announce("%s lets go" % _name(id))
 		return
 	if ball_kind == Ball.HELD and ball_holder == id:
-		_sv_stiffarm(id)       # same button: with the ball it's a stiff arm
+		_sv_stiffarm(id, side)       # same button: with the ball it's a stiff arm
 		return
 	p.tackle_cd = tk["cooldown"]
 
@@ -526,7 +540,14 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		elif facing >= float(tk["front_cos"]):
 			bonus *= float(tk["stiff_front_mult"])
 		else:
+			# On the flank: full strength if the arm is out on the tackler's side, a little
+			# if it's out on the other side, and in between if no side was chosen.
 			bonus *= float(tk["stiff_side_mult"])
+			var tackler_side := 1 if c.heading.cross(to_tackler) > 0.0 else -1
+			if cp.stiff_side == 0:
+				bonus *= float(tk["stiff_unset_mult"])
+			elif cp.stiff_side != tackler_side:
+				bonus *= float(tk["stiff_far_side_mult"])
 		balance += bonus
 		counter_note += " + stiff arm %.1f" % bonus
 		cp.stiff_timer = 0.0
@@ -784,7 +805,7 @@ func _sv_counter(id: int, kind: int) -> void:
 	_log_event("%s: %s%s" % [_name(id), name, " (weak)" if p.counter_weak else ""])
 
 
-func _sv_stiffarm(id: int) -> void:
+func _sv_stiffarm(id: int, side := 0) -> void:
 	var p: SvPlayer = sv_players.get(id)
 	var wrapped_now: bool = p != null and p.state.status == AthleteState.Status.WRAPPED
 	if p == null or p.counter_cd > 0.0 or (p.state.status != AthleteState.Status.OK and not wrapped_now):
@@ -805,9 +826,10 @@ func _sv_stiffarm(id: int) -> void:
 		return
 	p.counter_cd = tk["counter_cooldown"]
 	p.stiff_timer = tk["stiff_window"]
+	p.stiff_side = side
 	p.stiff_weak = p.state.stamina < float(tk["stiff_cost"])
 	p.state.stamina = maxf(0.0, p.state.stamina - float(tk["stiff_cost"]))
-	p.fx = 1
+	p.fx = 1 if side == 0 else (2 if side < 0 else 3)     # 1 forward, 2 left arm, 3 right arm
 	p.fx_timer = tk["stiff_fx_time"]
 
 

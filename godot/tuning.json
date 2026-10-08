@@ -230,6 +230,8 @@
     "strip_cooldown": 1.0,
     "strip_carrier_stumble": 0.5,
     "stiff_front_mult": 0.3,
-    "stiff_behind_mult": 0.0
+    "stiff_behind_mult": 0.0,
+    "stiff_unset_mult": 0.7,
+    "stiff_far_side_mult": 0.25
   }
 }
