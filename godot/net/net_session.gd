@@ -1455,12 +1455,17 @@ func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: floa
 	var landing_on := false
 	var land := Vector3.ZERO
 	if kind == Ball.HELD and athletes.has(holder):
-		pos = athletes[holder].position + Vector3(0, float(th["held_height"]), 0)
+		# Tucked at the carrier's side (in the athlete's own frame: x right, -z forward).
+		var off: Array = Tuning.section("art").get("carry_offset", [0.0, float(th["held_height"]), 0.0])
+		pos = athletes[holder].to_global(Vector3(off[0], off[1], off[2]))
 	elif kind == Ball.FLIGHT:
 		var fl := BallFlight.launch(p0, yaw, charge, lob, Tuning.data, angle)
 		pos = BallFlight.position_at(p0, fl, float(th["gravity"]), (tick_f - launch_tick) * _tick_dt())
 		landing_on = true
 		land = fl["land"]
+	# The thrower's arm comes through as the ball leaves (a pass or a pitch).
+	if kind == Ball.FLIGHT and int(view_ball.get("kind", -1)) == Ball.HELD and athletes.has(int(view_ball.get("holder", 0))):
+		athletes[int(view_ball["holder"])].play_oneshot("throw", float(Tuning.section("art").get("throw_seek", 0.0)))
 	if log_enabled and view_ball.get("kind", -1) != kind:
 		_log("[id=%d] ball -> %s%s" % [local_id, ["loose", "held", "flight"][kind],
 			(" land=(%.1f, %.1f) lob=%s" % [land.x, land.z, lob]) if landing_on else ""])

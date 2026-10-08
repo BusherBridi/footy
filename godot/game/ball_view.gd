@@ -13,8 +13,9 @@ var _arc_mat := StandardMaterial3D.new()
 
 func _init() -> void:
 	var sph := SphereMesh.new()
-	sph.radius = 0.3
-	sph.height = 0.6
+	var r: float = Tuning.section("art").get("ball_visual_radius", 0.3)
+	sph.radius = r
+	sph.height = r * 2.0
 	var bm := StandardMaterial3D.new()
 	bm.albedo_color = Color(0.5, 0.28, 0.12)
 	sph.material = bm

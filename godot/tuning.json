@@ -308,5 +308,46 @@
     "hitstop_bighit": 0.09,
     "fov_kick_deg": 7.0,
     "fov_kick_decay": 6.0
+  },
+  "art": {
+    "use_model": true,
+    "model": "res://assets/quaternius/UAL1_Standard.glb",
+    "extra_clips": "res://assets/quaternius/UAL2_Standard.glb",
+    "walk_speed": 1.6,
+    "jog_speed": 5.0,
+    "sprint_speed": 8.0,
+    "walk_below": 2.5,
+    "sprint_above": 7.4,
+    "min_anim_scale": 0.6,
+    "max_anim_scale": 1.6,
+    "blend": 0.18,
+    "throw_seek": 0.3,
+    "hurdle_lift": 0.5,
+    "clips": {
+      "idle": "Idle",
+      "walk": "Walk",
+      "jog": "Jog_Fwd",
+      "sprint": "Sprint",
+      "set": "Crouch_Idle",
+      "down": "Hit_Knockback",
+      "dive": "Push",
+      "stumble": "Hit_Chest",
+      "truck": "Shield_Dash",
+      "hurdle": "NinjaJump_Idle",
+      "wrapped": "Push",
+      "holding": "Push",
+      "pop": "Sprint",
+      "throw": "OverhandThrow",
+      "stiff_arm": "Punch_Jab",
+      "catch": "Spell_Simple_Shoot"
+    },
+    "dive_tilt_deg": 75.0,
+    "dive_lift": 0.45,
+    "ball_visual_radius": 0.12,
+    "carry_offset": [
+      0.28,
+      1.05,
+      -0.12
+    ]
   }
 }
