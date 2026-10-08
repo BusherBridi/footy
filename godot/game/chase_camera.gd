@@ -80,6 +80,13 @@ func _process(delta: float) -> void:
 	if target:
 		var goal := target.position + Vector3(0, _height, 0)
 		_pivot = _pivot.lerp(goal, 1.0 - exp(-float(c["follow_smoothing"]) * delta))
+	else:
+		# Nothing to follow (title screen): slowly circle high above the field.
+		yaw += delta * 0.05
+		pitch = deg_to_rad(-28.0)
+		_pivot = Vector3(0, 4.0, 0)
+		_dist = 38.0
+		_shoulder = 0.0
 	position = _pivot
 	rotation = Vector3(pitch, yaw, 0)
 	cam.position = Vector3(_shoulder, 0, _dist)

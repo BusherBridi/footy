@@ -80,7 +80,7 @@ func set_team(team: int, is_local: bool) -> void:
 		return
 	_team = team
 	_local = is_local
-	_marker.visible = is_local and team >= 0
+	_marker.visible = false     # the camera always follows you; a marker only blocked the view
 	if team >= 0:
 		var c: Color = TEAM_COLORS[team]
 		set_color(c.lightened(0.35) if is_local else c)

@@ -11,7 +11,9 @@ var session := NetSession.new()
 var brain: BotBrain = null
 var hud := Label.new()
 var reticle := PowerReticle.new()
-var menu := VBoxContainer.new()
+var menu := Control.new()
+var hint := Label.new()
+var show_debug := false
 var ip_edit := LineEdit.new()
 var status := Label.new()
 var args := {}
@@ -204,23 +206,85 @@ func _build_ui() -> void:
 	event_label.position.y = 96
 	hud.position = Vector2(12, 8)
 	hud.add_theme_font_size_override("font_size", 18)
+	hud.visible = false
 	layer.add_child(hud)
+	hint.text = "F3: controls & debug   F11: fullscreen   Esc: free the mouse"
+	hint.add_theme_font_size_override("font_size", 16)
+	hint.modulate = Color(1, 1, 1, 0.7)
+	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	hint.position = Vector2(16, -36)
+	layer.add_child(hint)
+	_build_menu(layer)
 
-	menu.position = Vector2(12, 150)
-	menu.custom_minimum_size = Vector2(260, 0)
-	var match_btn := Button.new()
-	match_btn.text = "Play vs bots"
-	match_btn.pressed.connect(_host_match)
-	var host_btn := Button.new()
-	host_btn.text = "Host sandbox"
-	host_btn.pressed.connect(_host)
-	ip_edit.text = "127.0.0.1"
-	var join_btn := Button.new()
-	join_btn.text = "Join"
-	join_btn.pressed.connect(func(): _join(ip_edit.text))
-	for c in [match_btn, host_btn, ip_edit, join_btn, status]:
-		menu.add_child(c)
+
+## Title screen: centred panel over the field, big buttons.
+func _build_menu(layer: CanvasLayer) -> void:
+	menu.set_anchors_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(menu)
+	var dim := ColorRect.new()
+	dim.color = Color(0.03, 0.06, 0.1, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu.add_child(center)
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.12, 0.18, 0.9)
+	style.set_corner_radius_all(16)
+	style.set_content_margin_all(40)
+	panel.add_theme_stylebox_override("panel", style)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 18)
+	panel.add_child(box)
+
+	var title := Label.new()
+	title.text = "FOOTY"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 96)
+	title.add_theme_color_override("font_color", Color(1.0, 0.75, 0.3))
+	box.add_child(title)
+	var sub := Label.new()
+	sub.text = "5v5 arcade football"
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 26)
+	sub.modulate = Color(1, 1, 1, 0.75)
+	box.add_child(sub)
+	box.add_child(_spacer(12))
+
+	box.add_child(_menu_button("Play vs bots", _host_match))
+	box.add_child(_menu_button("Host sandbox", _host))
+	box.add_child(_spacer(8))
+	var join_row := HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", 12)
+	ip_edit.text = "127.0.0.1"
+	ip_edit.placeholder_text = "Host IP"
+	ip_edit.custom_minimum_size = Vector2(300, 64)
+	ip_edit.add_theme_font_size_override("font_size", 26)
+	join_row.add_child(ip_edit)
+	var join_btn := _menu_button("Join", func(): _join(ip_edit.text))
+	join_btn.custom_minimum_size = Vector2(160, 64)
+	join_row.add_child(join_btn)
+	box.add_child(join_row)
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status.add_theme_font_size_override("font_size", 20)
+	box.add_child(status)
+
+
+func _menu_button(text: String, action: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(472, 68)
+	b.add_theme_font_size_override("font_size", 30)
+	b.pressed.connect(action)
+	return b
+
+
+func _spacer(h: float) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(0, h)
+	return c
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -233,6 +297,11 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
+	if Input.is_action_just_pressed("fullscreen"):
+		var full := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED if full else DisplayServer.WINDOW_MODE_FULLSCREEN)
+	if Input.is_action_just_pressed("debug_hud"):
+		show_debug = not show_debug
 	if Input.is_action_just_pressed("tackle"):
 		_tackle_latch = true
 	if Input.is_action_just_pressed("lateral"):
@@ -283,8 +352,10 @@ func _process(delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.add_theme_font_size_override("font_size", 14)
-	hud.position.y = 40
+	hud.visible = show_debug and not menu.visible
+	hint.visible = not menu.visible
+	hud.add_theme_font_size_override("font_size", 16)
+	hud.position.y = 48
 	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nSandbox host only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive, R/Y strip (help a wrap).  Z/LB lateral: pitch it backward or sideways, in the camera direction.  With the ball: F/X stiff arm (hold the stick left/right to cover that flank), G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE snap (match) / take ball (sandbox), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING", "SET"][int(s.status)],

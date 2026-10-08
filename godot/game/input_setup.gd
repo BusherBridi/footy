@@ -31,6 +31,8 @@ static func register() -> void:
 	_action("add_bot", [_key(KEY_B)])      # host only: dev test bot
 	_action("clear_bots", [_key(KEY_V)])
 	_action("reload_tuning", [_key(KEY_F5)])
+	_action("fullscreen", [_key(KEY_F11)])
+	_action("debug_hud", [_key(KEY_F3)])
 
 
 static func _action(name: String, events: Array) -> void:
