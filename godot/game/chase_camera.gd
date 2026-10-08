@@ -17,10 +17,15 @@ var _pivot := Vector3.ZERO
 var _dist := 7.0
 var _height := 2.2
 var _shoulder := 0.0
+var _trauma := 0.0
+var _fov_kick := 0.0
+var _base_fov := 75.0
+var _shake_t := 0.0
 
 
 func _ready() -> void:
 	add_child(cam)
+	_base_fov = cam.fov
 	pitch = deg_to_rad(Tuning.section("camera").get("pitch_deg", -18.0))
 
 
@@ -42,6 +47,15 @@ func set_qb(on: bool) -> void:
 
 
 ## While aiming, the camera may tilt much further up (a long throw hides the field).
+## Hit feedback: shake grows with the square of trauma, so small hits stay subtle.
+func add_shake(amount: float) -> void:
+	_trauma = clampf(_trauma + amount, 0.0, 1.0)
+
+
+func add_fov_kick(deg: float) -> void:
+	_fov_kick = maxf(_fov_kick, deg)
+
+
 func set_aiming(on: bool) -> void:
 	if on != aiming:
 		aiming = on
@@ -90,6 +104,15 @@ func _process(delta: float) -> void:
 	position = _pivot
 	rotation = Vector3(pitch, yaw, 0)
 	cam.position = Vector3(_shoulder, 0, _dist)
+	var fx := Tuning.section("fx")
+	_shake_t += delta
+	_trauma = maxf(0.0, _trauma - float(fx.get("shake_decay", 1.8)) * delta)
+	var s := _trauma * _trauma
+	var off := float(fx.get("shake_max_offset", 0.35)) * s
+	cam.position += Vector3(sin(_shake_t * 61.0), sin(_shake_t * 47.0 + 1.3), 0.0) * off
+	cam.rotation.z = deg_to_rad(float(fx.get("shake_max_roll_deg", 2.5))) * s * sin(_shake_t * 39.0)
+	_fov_kick = maxf(0.0, _fov_kick - float(fx.get("fov_kick_decay", 6.0)) * _fov_kick * delta)
+	cam.fov = _base_fov + _fov_kick
 
 
 func _clamp_pitch(c: Dictionary) -> void:

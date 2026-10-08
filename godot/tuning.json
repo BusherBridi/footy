@@ -295,5 +295,18 @@
     "cover_react_s": 0.25,
     "cover_sprint_gap_m": 3.0,
     "two_point_chance": 0.35
+  },
+  "fx": {
+    "enabled": true,
+    "radius_m": 18.0,
+    "shake_hit": 0.35,
+    "shake_bighit": 0.75,
+    "shake_decay": 1.8,
+    "shake_max_offset": 0.35,
+    "shake_max_roll_deg": 2.5,
+    "hitstop_hit": 0.045,
+    "hitstop_bighit": 0.09,
+    "fov_kick_deg": 7.0,
+    "fov_kick_decay": 6.0
   }
 }

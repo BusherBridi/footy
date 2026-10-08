@@ -10,6 +10,7 @@ extends Node
 signal local_ready(athlete: Athlete)
 signal disconnected
 signal event_text(text: String)
+signal fx_event(kind: String, pos: Vector3, strength: float)   # hits, catches, fumbles: for camera shake and dust
 
 enum Mode { NONE, HOST, CLIENT }
 
@@ -131,6 +132,8 @@ var max_correction := 0.0
 var _log_timer := 0.0
 
 var _acc := 0.0
+var _freeze_left := 0.0               # visual hit pause: hold the picture, the game keeps running
+var _vis_juke := {}
 var _out_queue: Array = []            # fake-lag queue: [release time, Callable]
 
 
@@ -602,6 +605,20 @@ func _announce(text: String) -> void:
 		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_event", text))
 
 
+## Feel effects (shake, hit pause, dust) on every machine. Purely visual.
+func _fx(kind: String, at: Vector2, strength := 1.0) -> void:
+	var pos := Vector3(at.x, 0.0, at.y)
+	fx_event.emit(kind, pos, strength)
+	for id in multiplayer.get_peers():
+		var peer_id: int = id
+		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_fx", kind, pos, strength))
+
+
+@rpc("authority", "unreliable")
+func rpc_fx(kind: String, pos: Vector3, strength: float) -> void:
+	fx_event.emit(kind, pos, strength)
+
+
 # --------------------------------------------------------------------- tackling
 
 ## The referee for a close-tackle press. Only the ball carrier can be tackled; pressing
@@ -736,11 +753,13 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		t.status_timer = tk["defender_stumble_time"]
 		_end_wrap(carrier_id, false)
 		_announce("BROKEN TACKLE (%s)" % detail)
+		_fx("hit", c.pos, 0.6)
 		_after_dive(t, dive)
 		return
 	if diff < float(tk["clean_margin"]) or not can_takedown:
 		_start_wrap(tackler_id, carrier_id, hit)
 		_announce("WRAPPED UP (%s)" % detail)
+		_fx("hit", c.pos, 0.4)
 		return
 
 	var big: bool = diff >= float(tk["big_hit_margin"]) and not behind
@@ -748,6 +767,7 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	c.status_timer = tk["down_time_big"] if big else tk["down_time"]
 	_end_wrap(carrier_id, false)
 	_announce(("BIG HIT" if big else "TACKLE") + " (%s)" % detail)
+	_fx("bighit" if big else "hit", c.pos, 1.0 if big else 0.7)
 	if big:
 		fumble_chance = maxf(fumble_chance, float(tk["big_hit_fumble_chance"]))
 	var roll: float = fumble_roll if fumble_roll >= 0.0 else randf()
@@ -879,6 +899,7 @@ func _check_dives() -> void:
 				if not p.dodged:
 					p.dodged = true
 					_announce("%s! %s dove past %s" % ["HURDLED" if hurdled else "JUKED", _name(id), _name(ball_holder)])
+					_fx("dust", p.state.pos, 0.8)
 				continue
 			_resolve_tackle(id, ball_holder, true)
 			return
@@ -1097,6 +1118,7 @@ func _ball_tick(dt: float) -> void:
 			var depth := 0.0
 			if flow != null:
 				depth = (cpos.y - flow.los_z) * flow.dir() / flow.yard()
+			_fx("catch", cpos, 0.3)
 			_log_event("catch by %s (%.2f m from the ball, %d in range) %.0f yards downfield, nearest defender %.1f m" % [_name(ball_holder), cands[0][0], cands.size(), depth, open_by])
 		return
 	if t_now >= float(fl["T"]):
@@ -1159,6 +1181,7 @@ func _fumble(carrier_id: int, at: Vector2) -> void:
 	ball_vel = Vector2(cos(ang), sin(ang)) * float(tk["fumble_pop_speed"])
 	ball_loose = Vector3(at.x, float(Tuning.section("throw")["ball_radius"]), at.y)
 	_announce("FUMBLE! %s drops the ball" % _name(carrier_id))
+	_fx("fumble", at, 0.8)
 
 
 func _log_event(line: String) -> void:
@@ -1302,7 +1325,10 @@ func _process(delta: float) -> void:
 		else:
 			i += 1
 
-	if mode == Mode.HOST:
+	_freeze_left -= delta
+	if _freeze_left > 0.0:
+		pass
+	elif mode == Mode.HOST:
 		_update_host_visuals()
 	elif mode == Mode.CLIENT and cl_state != null:
 		_update_client_visuals(delta)
@@ -1365,6 +1391,7 @@ func _update_host_visuals() -> void:
 		var ath := _ensure_athlete(id)
 		ath.set_team(p.team, id == local_id)
 		ath.set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0)
+		_juke_dust(id, p.state.juke_timer > 0.0, p.state.pos)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, ball_angle, sv_tick + a)
 
@@ -1413,6 +1440,7 @@ func _update_client_visuals(delta: float) -> void:
 		var ath := _ensure_athlete(id)
 		ath.set_team(int(b[15]), false)
 		ath.set_visual(pos, heading, spd, st, fx, jk)
+		_juke_dust(id, jk, pos)
 
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]
@@ -1440,6 +1468,18 @@ func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: floa
 	if ball_view:
 		ball_view.set_ball(pos)
 		ball_view.set_landing(landing_on, land, float(th["marker_radius"]))
+
+
+## Hold the picture for a moment (hit pause). Simulation and networking carry on.
+func freeze_visuals(seconds: float) -> void:
+	_freeze_left = maxf(_freeze_left, seconds)
+
+
+## Dust when a juke starts (seen from the synced state, so it needs no extra messages).
+func _juke_dust(id: int, juke: bool, pos: Vector2) -> void:
+	if juke and not _vis_juke.get(id, false):
+		fx_event.emit("cut", Vector3(pos.x, 0.0, pos.y), 0.35)
+	_vis_juke[id] = juke
 
 
 func _ensure_athlete(id: int) -> Athlete:

@@ -375,6 +375,7 @@ func _live_tick(dt: float) -> void:
 		var c: AthleteState = s.sv_players[s.ball_holder].state
 		var cd := team_dir(possession_team)
 		if (c.pos.y - attack_goal_z(possession_team)) * cd >= 0.0 and absf(c.pos.x) <= half_wid():
+			s._fx("touchdown", c.pos, 1.0)
 			_end_play("TOUCHDOWN by %s!" % s.name_of(s.ball_holder), 0.0, possession_team, true)
 			return
 		if is_out(c.pos):

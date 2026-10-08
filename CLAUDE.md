@@ -8,7 +8,7 @@ Footy is an arcade, Rematch-style American football game. Each human controls ex
 - **Nothing is locked in.** Every rule, number and mode may change after playtesting.
   - Every gameplay number goes in one tuning file, never hard-coded.
   - Alternatives that are still undecided (QB camera modes, sweet-spot vs simple-hold throw power) are built as in-game toggles so they can be compared.
-- **Placeholder art only.** Use simple shapes and primitives. No AI-generated art, and no real NFL teams, logos, players or Rematch assets.
+- **Art.** Simple shapes and primitives, plus free CC0 models and animations (agreed Oct 2026; currently the Quaternius Universal Animation Library in `godot/assets/quaternius/`). No AI-generated art, and no real NFL teams, logos, players or Rematch assets.
 
 ## Design
 

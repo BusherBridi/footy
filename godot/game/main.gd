@@ -28,6 +28,7 @@ var _lateral_latch := false
 var _hurdle_latch := false
 var event_label := Label.new()
 var play_view := PlayView.new()
+var fx := Fx.new()
 var match_hud := Label.new()
 var _seen_play := -1
 var _event_time := 0.0
@@ -45,6 +46,7 @@ func _ready() -> void:
 	session.input_provider = _provide_input
 	session.local_ready.connect(func(a: Athlete): camera.target = a)
 	session.disconnected.connect(_on_disconnected)
+	session.fx_event.connect(_on_fx)
 	session.event_text.connect(func(t: String):
 		event_label.text = t
 		_event_time = 2.5)
@@ -99,6 +101,29 @@ func _host() -> void:
 		status.text = "Host failed: %s" % error_string(err)
 		return
 	menu.hide()
+
+
+## Hits shake the camera and pause the picture for a beat, more the closer you are.
+func _on_fx(kind: String, pos: Vector3, strength: float) -> void:
+	var f := Tuning.section("fx")
+	if not f.get("enabled", true):
+		return
+	fx.spawn(kind, pos, strength)
+	var near := 1.0
+	if camera.target:
+		near = clampf(1.0 - camera.target.position.distance_to(pos) / float(f["radius_m"]), 0.0, 1.0)
+	if near <= 0.0:
+		return
+	match kind:
+		"bighit":
+			camera.add_shake(float(f["shake_bighit"]) * near)
+			camera.add_fov_kick(float(f["fov_kick_deg"]) * near)
+			session.freeze_visuals(float(f["hitstop_bighit"]))
+		"hit", "fumble":
+			camera.add_shake(float(f["shake_hit"]) * strength * near)
+			session.freeze_visuals(float(f["hitstop_hit"]) * near)
+		"touchdown":
+			camera.add_shake(0.3)
 
 
 func _host_match() -> void:
@@ -188,6 +213,7 @@ func _build_world() -> void:
 	add_child(camera)
 	camera.cam.current = true
 	add_child(play_view)
+	add_child(fx)
 
 
 func _build_ui() -> void:
