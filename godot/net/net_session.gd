@@ -515,12 +515,17 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		balance -= float(tk["juke_close_penalty"])
 		counter_note += " - juke %.1f" % float(tk["juke_close_penalty"])
 	if not dive and cp.stiff_timer > 0.0:
-		# A well-timed stiff arm adds balance. Weak against hits from the side or behind,
-		# and weaker still when it was thrown with an empty stamina bar.
+		# A well-timed stiff arm adds balance against a close tackle (not a dive), at full
+		# strength from the side, and weaker still with an empty stamina bar.
 		var bonus: float = tk["stiff_bonus"]
 		if cp.stiff_weak:
 			bonus *= float(tk["counter_weak_mult"])
-		if facing < float(tk["front_cos"]):
+		# The arm goes out to the side: it answers a tackler coming at your flank.
+		if behind:
+			bonus *= float(tk["stiff_behind_mult"])
+		elif facing >= float(tk["front_cos"]):
+			bonus *= float(tk["stiff_front_mult"])
+		else:
 			bonus *= float(tk["stiff_side_mult"])
 		balance += bonus
 		counter_note += " + stiff arm %.1f" % bonus

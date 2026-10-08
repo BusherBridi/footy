@@ -28,7 +28,10 @@ func _ready():
 	print("%-46s %s" % ["tackle cooldown (second press)", t(Vector2(0, -1.2), Vector2(0, 1), sprint, run, true)])
 	print()
 	print("%-46s %s" % ["stiff arm + dive cases", "result"])
-	print("%-46s %s" % ["head-on sprint, stiff arm timed", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, true)])
+	print("%-46s %s" % ["head-on sprint, stiff arm timed (weak)", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, true)])
+	print("%-46s %s" % ["side hit sprint, NO stiff arm", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, false)])
+	print("%-46s %s" % ["from behind, stiff arm timed (no help)", st(Vector2(0, 1.2), Vector2(0, -1), sprint, run, 1.0, true)])
+	print("%-46s %s" % ["dive at a carrier with a live stiff arm", stiff_vs_dive()])
 	print("%-46s %s" % ["head-on sprint, stiff arm too early/late", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 1.0, false)])
 	print("%-46s %s" % ["side hit sprint, stiff arm timed", st(Vector2(1.2, 0), Vector2(-1, 0), sprint, run, 1.0, true)])
 	print("%-46s %s" % ["head-on sprint, stiff arm with empty stamina", st(Vector2(0, -1.2), Vector2(0, 1), sprint, sprint, 0.05, true)])
@@ -376,3 +379,14 @@ func strip_twice() -> String:
 	s._sv_strip(4)
 	s.fumble_roll = -1.0
 	return "%d strip attempt(s) resolved from two presses" % out.size()
+
+
+func stiff_vs_dive() -> String:
+	reset(Vector2(0, -2.5), Vector2(0, 1), 7.0, 0.0)
+	s.sv_players[2].state.speed = 0.0
+	s._sv_stiffarm(2)
+	s._sv_dive(3)
+	var out := ev_capture()
+	for i in 20:
+		s._host_tick(1.0 / 30.0)
+	return "%s" % (str(out[0]).replace("(player 3 ", "(") if out.size() > 0 else "(no event)")
