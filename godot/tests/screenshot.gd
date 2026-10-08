@@ -1,6 +1,6 @@
 extends Node
 ## Renders the game for a moment and saves a screenshot (needs a display, e.g. xvfb-run).
-##   godot --path godot --rendering-driver opengl3 res://tests/screenshot.tscn -- --shot=/path/out.png [--wait=1.5] [--match --autoplay]
+##   godot --path godot --rendering-driver opengl3 res://tests/screenshot.tscn -- --shot=/path/out.png [--wait=1.5] [--match --autoplay] [--card]
 
 func _ready() -> void:
 	var main: Node = load("res://game/main.tscn").instantiate()
@@ -12,6 +12,8 @@ func _ready() -> void:
 			out = a.trim_prefix("--shot=")
 		elif a.begins_with("--wait="):
 			wait = float(a.trim_prefix("--wait="))
+		elif a == "--card":
+			main.card.visible = true
 	await get_tree().create_timer(wait).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(out)

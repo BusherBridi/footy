@@ -1,0 +1,41 @@
+{
+  "_readme": "Button bindings. keys = keyboard and mouse, pad = controller (Xbox names). Several actions may share a button: the game picks by context (ball carrier, defender, QB who can still pass, before the snap). Modifiers: Shift+Q, Ctrl+Q, Alt+Q. Mouse: MouseLeft, MouseRight, MouseMiddle, Mouse4, Mouse5. Pad: A B X Y LB RB LT RT L3 R3 Back Start DpadUp DpadDown DpadLeft DpadRight, sticks LeftX- LeftX+ LeftY- LeftY+ RightX- RightX+ RightY- RightY+. Pressing the two hand buttons together (within input.chord_window_s in tuning.json) is truck with the ball and dive without. F5 reloads this file.",
+  "actions": {
+    "move_forward":   {"keys": ["W", "Up"],    "pad": ["LeftY-"]},
+    "move_back":      {"keys": ["S", "Down"],  "pad": ["LeftY+"]},
+    "move_left":      {"keys": ["A", "Left"],  "pad": ["LeftX-"]},
+    "move_right":     {"keys": ["D", "Right"], "pad": ["LeftX+"]},
+    "look_left":      {"keys": [], "pad": ["RightX-"]},
+    "look_right":     {"keys": [], "pad": ["RightX+"]},
+    "look_up":        {"keys": [], "pad": ["RightY-"]},
+    "look_down":      {"keys": [], "pad": ["RightY+"]},
+    "sprint":         {"keys": ["Shift"], "pad": []},
+    "sprint_trigger": {"keys": [], "pad": ["RT"]},
+
+    "stiff_left":     {"keys": ["MouseLeft"],  "pad": ["LB"]},
+    "stiff_right":    {"keys": ["MouseRight"], "pad": ["RB"]},
+    "spin":           {"keys": ["E"],     "pad": ["B"]},
+    "hurdle":         {"keys": ["Space"], "pad": ["A"]},
+    "lateral":        {"keys": ["R"],     "pad": ["X"]},
+
+    "aim":            {"keys": ["MouseRight"], "pad": ["LT"]},
+    "throw":          {"keys": ["MouseLeft"],  "pad": ["RT"]},
+    "snap":           {"keys": ["R"],     "pad": ["A"]},
+
+    "tackle":         {"keys": ["MouseLeft"],  "pad": ["RB"]},
+    "strip":          {"keys": ["MouseRight"], "pad": ["LB"]},
+
+    "try_one":        {"keys": ["1"], "pad": ["DpadLeft"]},
+    "try_two":        {"keys": ["2"], "pad": ["DpadRight"]},
+    "cycle_camera":   {"keys": ["C"], "pad": ["L3"]},
+    "lob_toggle":     {"keys": ["Shift+Q"], "pad": ["DpadUp"]},
+    "controls_card":  {"keys": ["F1"], "pad": ["Start"]},
+    "throw_mode":     {"keys": ["F2"], "pad": []},
+    "debug_hud":      {"keys": ["F3"], "pad": []},
+    "reload_tuning":  {"keys": ["F5"], "pad": []},
+    "fullscreen":     {"keys": ["F11"], "pad": []},
+    "add_bot":        {"keys": ["B"], "pad": []},
+    "add_chaser":     {"keys": ["N"], "pad": []},
+    "clear_bots":     {"keys": ["V"], "pad": []}
+  }
+}

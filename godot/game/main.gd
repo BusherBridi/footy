@@ -34,6 +34,14 @@ var _seen_play := -1
 var _event_time := 0.0
 var _take_latch := false
 var _try_pick := 0
+var _spin_latch := false
+var _stiff_side := 0             # -1 / +1: a stiff arm on that side is waiting to be sent
+var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
+var _hand_first := 0             # chord detection: 1 = first hand button down, 2 = second, 0 = none
+var _hand_timer := 0.0
+var card := PanelContainer.new()
+var _card_grid := GridContainer.new()
+var _pad_mode := false           # the last input came from a controller (labels show pad buttons)
 
 
 func _ready() -> void:
@@ -154,7 +162,7 @@ func _provide_input() -> Dictionary:
 		var dt := 1.0 / float(Tuning.section("net")["tick_hz"])
 		return brain.think(session.local_state().pos, dt, Tuning.data, session.local_has_ball())
 	var stick := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var aiming := Input.is_action_pressed("aim")
+	var aiming := Input.is_action_pressed("aim") and session.local_can_pass()
 	var take := _take_latch
 	_take_latch = false
 	var try_pick := _try_pick
@@ -173,6 +181,12 @@ func _provide_input() -> Dictionary:
 	_lateral_latch = false
 	var hurdle := _hurdle_latch
 	_hurdle_latch = false
+	var spin := _spin_latch
+	_spin_latch = false
+	var side := _stiff_side
+	_stiff_side = 0
+	var pop := _pop_side
+	_pop_side = 0
 	return {
 		"move": camera.world_move(stick),
 		"sprint": Input.is_action_pressed("sprint") or (Input.is_action_pressed("sprint_trigger") and not aiming),
@@ -191,6 +205,9 @@ func _provide_input() -> Dictionary:
 		"strip": strip,
 		"lateral": lateral,
 		"hurdle": hurdle,
+		"spin": spin,
+		"side": side,
+		"spin_side": pop,
 	}
 
 
@@ -238,7 +255,7 @@ func _build_ui() -> void:
 	hud.add_theme_font_size_override("font_size", 18)
 	hud.visible = false
 	layer.add_child(hud)
-	hint.text = "F3: controls & debug   F11: fullscreen   Esc: free the mouse"
+	hint.text = "F1 / Start: controls   F3: debug   F11: fullscreen   Esc: free the mouse"
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.modulate = Color(1, 1, 1, 0.7)
 	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -248,6 +265,7 @@ func _build_ui() -> void:
 		l.add_theme_constant_override("outline_size", 6)
 		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_build_menu(layer)
+	_build_card(layer)
 
 
 ## Title screen: centred panel over the field, big buttons.
@@ -320,6 +338,80 @@ func _spacer(h: float) -> Control:
 	return c
 
 
+func _input(event: InputEvent) -> void:
+	var pad := event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.5)
+	var kbm := event is InputEventKey or event is InputEventMouseButton
+	if (pad or kbm) and pad != _pad_mode:
+		_pad_mode = pad
+
+
+## Controls card (F1 / Start): every move with its keyboard-and-mouse and controller
+## buttons, read from controls.json so it never goes stale.
+func _build_card(layer: CanvasLayer) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.05, 0.08, 0.12, 0.92)
+	style.set_corner_radius_all(14)
+	style.set_content_margin_all(28)
+	card.add_theme_stylebox_override("panel", style)
+	var wrap := CenterContainer.new()
+	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(wrap)
+	card.visible = false
+	wrap.add_child(card)
+	_card_grid.columns = 3
+	_card_grid.add_theme_constant_override("h_separation", 40)
+	_card_grid.add_theme_constant_override("v_separation", 4)
+	card.add_child(_card_grid)
+	_fill_card()
+
+
+func _fill_card() -> void:
+	for c in _card_grid.get_children():
+		c.queue_free()
+	var L := func(a: String, pad: bool) -> String: return InputSetup.label(a, pad)
+	var both := func(a: String, b: String, pad: bool) -> String: return "%s + %s" % [L.call(a, pad), L.call(b, pad)]
+	var rows: Array = [
+		["CONTROLS", "Keyboard & mouse", "Controller"],
+		["Move / look", "WASD / mouse", "Left stick / right stick"],
+		["Sprint (hold)", L.call("sprint", false), L.call("sprint_trigger", true)],
+		["WITH THE BALL"],
+		["Stiff arm, left side", L.call("stiff_left", false), L.call("stiff_left", true)],
+		["Stiff arm, right side", L.call("stiff_right", false), L.call("stiff_right", true)],
+		["Truck", both.call("stiff_left", "stiff_right", false), both.call("stiff_left", "stiff_right", true)],
+		["Spin (then a hand button = pop that side)", L.call("spin", false), L.call("spin", true)],
+		["Hurdle", L.call("hurdle", false), L.call("hurdle", true)],
+		["Lateral (where the camera points)", L.call("lateral", false), L.call("lateral", true)],
+		["QB (one forward pass, from behind the line)"],
+		["Snap", L.call("snap", false), L.call("snap", true)],
+		["Aim (look up / down = angle)", L.call("aim", false), L.call("aim", true)],
+		["Power: hold, release to throw", L.call("throw", false), L.call("throw", true)],
+		["Cancel the throw", "let go of aim first", "let go of aim first"],
+		["DEFENSE"],
+		["Tackle (again: let go of a hold)", L.call("tackle", false), L.call("tackle", true)],
+		["Strip (join a wrap)", L.call("strip", false), L.call("strip", true)],
+		["Dive", both.call("tackle", "strip", false), both.call("tackle", "strip", true)],
+		["OTHER"],
+		["Pick the 1 / 2-point try", "%s / %s" % [L.call("try_one", false), L.call("try_two", false)], "%s / %s" % [L.call("try_one", true), L.call("try_two", true)]],
+		["Camera style", L.call("cycle_camera", false), L.call("cycle_camera", true)],
+		["Bullet / lob (old throw mode)", L.call("lob_toggle", false), L.call("lob_toggle", true)],
+		["Old throw mode / debug / reload / fullscreen", "F2 / F3 / F5 / F11", "-"],
+		["This card", L.call("controls_card", false), L.call("controls_card", true)],
+	]
+	for r in rows:
+		var header: bool = r.size() == 1 or r[0] == "CONTROLS"
+		for i in 3:
+			var l := Label.new()
+			l.text = r[i] if i < r.size() else ""
+			l.add_theme_font_size_override("font_size", 26 if r[0] == "CONTROLS" else 19)
+			if header:
+				l.add_theme_color_override("font_color", Color(1.0, 0.75, 0.3))
+			if header and r.size() == 1 and i == 0:
+				l.custom_minimum_size.y = 34
+				l.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+			_card_grid.add_child(l)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and not menu.visible:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -327,26 +419,73 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+## The two hand buttons. With the ball: left / right stiff arm, both together truck, and
+## mid-spin either one picks the pop side. Without: tackle / strip, both together dive.
+## A QB who can still pass keeps them for aim and throw while aiming.
+func _hands(delta: float) -> void:
+	var carrier := session.local_has_ball()
+	if carrier and session.local_can_pass() and Input.is_action_pressed("aim"):
+		_hand_first = 0
+		return
+	var a := Input.is_action_just_pressed("stiff_left" if carrier else "tackle")
+	var b := Input.is_action_just_pressed("stiff_right" if carrier else "strip")
+	if carrier and session.local_state().status == AthleteState.Status.SPIN:
+		if a or b:
+			_pop_side = -1 if a else 1
+		_hand_first = 0
+		return
+	var window := float(Tuning.section("input").get("chord_window_s", 0.0))
+	var both := (a and b) or (_hand_first == 1 and b) or (_hand_first == 2 and a)
+	var single := 0
+	if both:
+		_hand_first = 0
+	elif _hand_first != 0:
+		_hand_timer -= delta
+		if _hand_timer <= 0.0:
+			single = _hand_first
+			_hand_first = 0
+	elif a or b:
+		_hand_first = 1 if a else 2
+		_hand_timer = window
+		if window <= 0.0:
+			single = _hand_first
+			_hand_first = 0
+	if both:
+		if carrier:
+			_truck_latch = true
+		else:
+			_dive_latch = true
+	elif single != 0:
+		if carrier:
+			_tackle_latch = true          # with the ball the tackle press is the stiff arm
+			_stiff_side = -1 if single == 1 else 1
+		elif single == 1:
+			_tackle_latch = true
+		else:
+			_strip_latch = true
+
+
 func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
+		InputSetup.register()
+		_fill_card()
 	if Input.is_action_just_pressed("fullscreen"):
 		var full := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED if full else DisplayServer.WINDOW_MODE_FULLSCREEN)
 	if Input.is_action_just_pressed("debug_hud"):
 		show_debug = not show_debug
-	if Input.is_action_just_pressed("tackle"):
-		_tackle_latch = true
+	if Input.is_action_just_pressed("controls_card"):
+		card.visible = not card.visible
+	_hands(_delta)
 	if Input.is_action_just_pressed("lateral"):
 		_lateral_latch = true
-	if Input.is_action_just_pressed("strip"):
-		_strip_latch = true
-	if Input.is_action_just_pressed("truck"):
-		_truck_latch = true
 	if Input.is_action_just_pressed("hurdle"):
 		_hurdle_latch = true
-	if Input.is_action_just_pressed("dive"):
-		_dive_latch = true
+	if Input.is_action_just_pressed("spin"):
+		_spin_latch = true
+	if Input.is_action_just_pressed("snap") and not session.local_has_ball():
+		_take_latch = true
 	if Input.is_action_just_pressed("add_chaser"):
 		session.host_add_bot("chase")
 	if Input.is_action_just_pressed("add_bot"):
@@ -363,8 +502,6 @@ func _physics_process(_delta: float) -> void:
 		_try_pick = 1
 	if Input.is_action_just_pressed("try_two"):
 		_try_pick = 2
-	if Input.is_action_just_pressed("take_ball"):
-		_take_latch = true
 	if Input.is_action_just_pressed("cycle_camera"):
 		camera.cycle_style()
 
@@ -393,7 +530,7 @@ func _process(delta: float) -> void:
 	hint.visible = not menu.visible
 	hud.add_theme_font_size_override("font_size", 16)
 	hud.position.y = 48
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nSandbox host only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive, R/Y strip (help a wrap).  Z/LB lateral: pitch it backward or sideways, in the camera direction.  With the ball: F/X stiff arm (hold the stick left/right to cover that flank), G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE snap (match) / take ball (sandbox), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nF1 controls card.  Sandbox host only: B add receiver bot, N add chaser bot, V remove bots, R take the ball" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
 		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING", "SET"][int(s.status)],
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),
@@ -430,9 +567,9 @@ func _update_match_view() -> void:
 	var my_try := int(v["try"]) > 0 and int(v["qb"]) == session.local_id
 	match int(v["phase"]):
 		PlayFlow.Phase.PRE_SNAP:
-			phase_text = "Press E to snap" if int(v["qb"]) == session.local_id else "Waiting for the snap"
+			phase_text = ("Press %s to snap" % InputSetup.label("snap", _pad_mode)) if int(v["qb"]) == session.local_id else "Waiting for the snap"
 			if my_try:
-				phase_text += "  (1 / 2: pick the 1- or 2-point try)"
+				phase_text += "  (%s / %s: pick the 1- or 2-point try)" % [InputSetup.label("try_one", _pad_mode), InputSetup.label("try_two", _pad_mode)]
 		PlayFlow.Phase.LIVE:
 			var rush := float(v["rush"])
 			phase_text = ("Rush in %.1f" % rush) if rush > 0.0 else "LIVE"

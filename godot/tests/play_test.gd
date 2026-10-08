@@ -54,6 +54,13 @@ func _ready():
 	print("%-50s %s" % ["touchdown", _touchdown()])
 	print("%-50s %s" % ["only the thrower's team can catch", _catch_rule()])
 	print()
+	print("%-50s %s" % ["forward pass rule", "result"])
+	print("%-50s %s" % ["QB behind the line throws", _pass_case(-2.0, false)])
+	print("%-50s %s" % ["a second forward pass on the same play", _pass_case(-2.0, true)])
+	print("%-50s %s" % ["QB past the line throws", _pass_case(3.0, false)])
+	print("%-50s %s" % ["defender holding the ball throws", _defender_pass()])
+	print("%-50s %s" % ["the next play allows a pass again", _pass_case(-2.0, false)])
+	print()
 	print("%-50s %s" % ["downs and scoring", "result"])
 	_reset_drive(0, 15)
 	print("%-50s %s" % ["start of a drive", _state()])
@@ -174,6 +181,33 @@ func _finish() -> String:
 		f.yard_line_text(f.los_z, f.offense), " (possession changed)" if f.offense != before_offense else ""]
 
 
+## The QB throws from yards_past (negative = behind the line); optionally after a first pass.
+func _pass_case(yards_past: float, second: bool) -> String:
+	_reset_drive(0, 15)
+	_fresh_live()
+	var f := s.flow
+	var qb: AthleteState = s.sv_players[f.qb_id].state
+	var yaw := 0.0 if f.dir() < 0 else PI
+	if second:
+		s._sv_throw(f.qb_id, 0.3, yaw, false)
+		s.ball_kind = NetSession.Ball.HELD       # pretend the QB got it back
+		s.ball_holder = f.qb_id
+	qb.pos = Vector2(0, f.los_z + f.dir() * yards_past * f.yard())
+	s._sv_throw(f.qb_id, 0.3, yaw, false)
+	return "thrown" if s.ball_kind == NetSession.Ball.FLIGHT else "refused (still held)"
+
+
+func _defender_pass() -> String:
+	_reset_drive(0, 15)
+	_fresh_live()
+	var f := s.flow
+	var dfn: int = f.slots[1 - f.offense][1]
+	s.ball_holder = dfn
+	s.sv_players[dfn].state.pos = Vector2(0, f.los_z - f.dir() * 3.0)
+	s._sv_throw(dfn, 0.3, 0.0, false)
+	return "thrown" if s.ball_kind == NetSession.Ball.FLIGHT else "refused (still held)"
+
+
 func _incomplete() -> String:
 	_fresh_live()
 	var f := s.flow
@@ -210,6 +244,7 @@ func _touchdown() -> String:
 
 
 func _catch_rule() -> String:
+	_reset_drive(0, 15)     # a normal play: from a try spot a 20 m throw sails out the back
 	_fresh_live()
 	var f := s.flow
 	var qb: AthleteState = s.sv_players[f.qb_id].state

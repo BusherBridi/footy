@@ -30,6 +30,7 @@ var down := 1
 var gain_z := 0.0             # the line to gain: midfield, then the goal line
 var score := [0, 0]
 var try_points := 0           # 0 = normal play; 1 or 2 while running a try after a touchdown
+var pass_thrown := false      # the one forward pass of this play is used up
 
 var _next_offense := 0
 var _next_los_z := 0.0
@@ -212,6 +213,7 @@ func _order_team(team: int) -> Array:
 
 func _setup_play() -> void:
 	play_no += 1
+	pass_thrown = false
 	phase = Phase.PRE_SNAP
 	phase_time = 0.0
 	rush_left = float(_m()["rush_time"])
@@ -316,6 +318,13 @@ func _snap() -> void:
 
 func is_live() -> bool:
 	return phase == Phase.LIVE
+
+
+## The forward pass rule: one per play, by the offense, thrown from behind the line.
+func can_pass(id: int) -> bool:
+	if phase != Phase.LIVE or pass_thrown or team_of(id) != offense or not s.sv_players.has(id):
+		return false
+	return (s.sv_players[id].state.pos.y - los_z) * dir() <= 0.0
 
 
 func can_tackle(tackler: int, carrier: int) -> bool:
@@ -519,5 +528,5 @@ func bot_context(id: int) -> Dictionary:
 func view() -> Dictionary:
 	return {"phase": phase, "offense": offense, "dir": dir(), "los": los_z, "rush": rush_left,
 		"qb": qb_id, "play_no": play_no, "phase_time": phase_time, "down": down, "gain": gain_z,
-		"score0": score[0], "score1": score[1], "try": try_points, "down_text": down_text(),
+		"score0": score[0], "score1": score[1], "try": try_points, "pass_used": 1 if pass_thrown else 0, "down_text": down_text(),
 		"spot_text": yard_line_text(los_z, offense)}

@@ -1,40 +1,104 @@
 class_name InputSetup
 extends RefCounted
-## Registers keyboard + controller actions in code so both work from day one.
+## Registers keyboard, mouse and controller actions from res://controls.json, so a
+## layout can be tried without touching code. F5 reloads it along with the tuning.
+
+const PATH := "res://controls.json"
+
+const _MOUSE := {"MouseLeft": MOUSE_BUTTON_LEFT, "MouseRight": MOUSE_BUTTON_RIGHT, "MouseMiddle": MOUSE_BUTTON_MIDDLE,
+	"Mouse4": MOUSE_BUTTON_XBUTTON1, "Mouse5": MOUSE_BUTTON_XBUTTON2,
+	"WheelUp": MOUSE_BUTTON_WHEEL_UP, "WheelDown": MOUSE_BUTTON_WHEEL_DOWN}
+const _PAD := {"A": JOY_BUTTON_A, "B": JOY_BUTTON_B, "X": JOY_BUTTON_X, "Y": JOY_BUTTON_Y,
+	"LB": JOY_BUTTON_LEFT_SHOULDER, "RB": JOY_BUTTON_RIGHT_SHOULDER, "L3": JOY_BUTTON_LEFT_STICK,
+	"R3": JOY_BUTTON_RIGHT_STICK, "Back": JOY_BUTTON_BACK, "Start": JOY_BUTTON_START,
+	"DpadUp": JOY_BUTTON_DPAD_UP, "DpadDown": JOY_BUTTON_DPAD_DOWN, "DpadLeft": JOY_BUTTON_DPAD_LEFT,
+	"DpadRight": JOY_BUTTON_DPAD_RIGHT}
+const _AXES := {"LeftX": JOY_AXIS_LEFT_X, "LeftY": JOY_AXIS_LEFT_Y, "RightX": JOY_AXIS_RIGHT_X,
+	"RightY": JOY_AXIS_RIGHT_Y}
+
+## action -> {"keys": [...], "pad": [...]} as written in the file (for the controls card).
+static var bindings: Dictionary = {}
 
 
 static func register() -> void:
-	_action("move_left", [_key(KEY_A), _key(KEY_LEFT), _axis(JOY_AXIS_LEFT_X, -1.0)])
-	_action("move_right", [_key(KEY_D), _key(KEY_RIGHT), _axis(JOY_AXIS_LEFT_X, 1.0)])
-	_action("move_forward", [_key(KEY_W), _key(KEY_UP), _axis(JOY_AXIS_LEFT_Y, -1.0)])
-	_action("move_back", [_key(KEY_S), _key(KEY_DOWN), _axis(JOY_AXIS_LEFT_Y, 1.0)])
-	_action("sprint", [_key(KEY_SHIFT)])
-	_action("sprint_trigger", [_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
-	# QB: aim with RMB/LT, throw with LMB/RT while aiming (RT only sprints when not aiming).
-	_action("aim", [_mouse(MOUSE_BUTTON_RIGHT), _axis(JOY_AXIS_TRIGGER_LEFT, 1.0)])
-	_action("throw", [_mouse(MOUSE_BUTTON_LEFT), _axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)])
-	_action("throw_mode", [_key(KEY_F2)])
-	_action("lob_toggle", [_key(KEY_Q), _button(JOY_BUTTON_RIGHT_SHOULDER)])
-	_action("take_ball", [_key(KEY_E), _button(JOY_BUTTON_BACK)])   # temporary stand-in for the snap
-	_action("cycle_camera", [_key(KEY_C), _button(JOY_BUTTON_LEFT_STICK)])
-	_action("look_left", [_axis(JOY_AXIS_RIGHT_X, -1.0)])
-	_action("look_right", [_axis(JOY_AXIS_RIGHT_X, 1.0)])
-	_action("look_up", [_axis(JOY_AXIS_RIGHT_Y, -1.0)])
-	_action("look_down", [_axis(JOY_AXIS_RIGHT_Y, 1.0)])
-	_action("tackle", [_key(KEY_F), _button(JOY_BUTTON_X), _mouse(MOUSE_BUTTON_XBUTTON1)])
-	_action("dive", [_key(KEY_G), _button(JOY_BUTTON_B)])
-	_action("lateral", [_key(KEY_Z), _button(JOY_BUTTON_LEFT_SHOULDER)])
-	_action("strip", [_key(KEY_R), _button(JOY_BUTTON_Y)])      # a defender's Y; the carrier's Y is truck
-	_action("truck", [_key(KEY_T), _button(JOY_BUTTON_Y)])
-	_action("hurdle", [_key(KEY_SPACE), _button(JOY_BUTTON_A)])
-	_action("add_chaser", [_key(KEY_N)])
-	_action("add_bot", [_key(KEY_B)])      # host only: dev test bot
-	_action("clear_bots", [_key(KEY_V)])
-	_action("reload_tuning", [_key(KEY_F5)])
-	_action("try_one", [_key(KEY_1), _button(JOY_BUTTON_DPAD_LEFT)])     # pick the 1-point try
-	_action("try_two", [_key(KEY_2), _button(JOY_BUTTON_DPAD_RIGHT)])    # pick the 2-point try
-	_action("fullscreen", [_key(KEY_F11)])
-	_action("debug_hud", [_key(KEY_F3)])
+	var f := FileAccess.open(PATH, FileAccess.READ)
+	var parsed: Variant = JSON.parse_string(f.get_as_text()) if f != null else null
+	if typeof(parsed) != TYPE_DICTIONARY or not parsed.has("actions"):
+		push_error("InputSetup: %s is missing or not valid JSON, keeping the old bindings" % PATH)
+		return
+	bindings = parsed["actions"]
+	for action in bindings:
+		var events: Array = []
+		var b: Dictionary = bindings[action]
+		for name in b.get("keys", []):
+			var e := _parse_key(str(name))
+			if e != null:
+				events.append(e)
+		for name in b.get("pad", []):
+			var e := _parse_pad(str(name))
+			if e != null:
+				events.append(e)
+		_action(action, events)
+
+
+## "Shift+Q" -> Q with Shift held. Mouse buttons by name.
+static func _parse_key(name: String) -> InputEvent:
+	if _MOUSE.has(name):
+		var m := InputEventMouseButton.new()
+		m.button_index = _MOUSE[name]
+		return m
+	var parts := name.split("+")
+	var code := OS.find_keycode_from_string(parts[parts.size() - 1])
+	if code == KEY_NONE:
+		push_error("InputSetup: unknown key '%s'" % name)
+		return null
+	var e := InputEventKey.new()
+	e.physical_keycode = code
+	for i in parts.size() - 1:
+		match parts[i].to_lower():
+			"shift": e.shift_pressed = true
+			"ctrl": e.ctrl_pressed = true
+			"alt": e.alt_pressed = true
+	return e
+
+
+static func _parse_pad(name: String) -> InputEvent:
+	if _PAD.has(name):
+		var b := InputEventJoypadButton.new()
+		b.button_index = _PAD[name]
+		return b
+	if name == "LT" or name == "RT":
+		var t := InputEventJoypadMotion.new()
+		t.axis = JOY_AXIS_TRIGGER_LEFT if name == "LT" else JOY_AXIS_TRIGGER_RIGHT
+		t.axis_value = 1.0
+		return t
+	var stick := name.substr(0, name.length() - 1)
+	if _AXES.has(stick) and (name.ends_with("-") or name.ends_with("+")):
+		var a := InputEventJoypadMotion.new()
+		a.axis = _AXES[stick]
+		a.axis_value = -1.0 if name.ends_with("-") else 1.0
+		return a
+	push_error("InputSetup: unknown controller input '%s'" % name)
+	return null
+
+
+## How a binding reads on the controls card.
+static func pretty(name: String) -> String:
+	const NAMES := {"MouseLeft": "Left click", "MouseRight": "Right click", "MouseMiddle": "Middle click",
+		"LeftX-": "L stick", "LeftX+": "L stick", "LeftY-": "L stick", "LeftY+": "L stick",
+		"DpadLeft": "D-pad left", "DpadRight": "D-pad right", "DpadUp": "D-pad up", "DpadDown": "D-pad down"}
+	return NAMES.get(name, name)
+
+
+## The bindings of one action, e.g. "E" and "B".
+static func label(action: String, pad: bool) -> String:
+	var names: Array = bindings.get(action, {}).get("pad" if pad else "keys", [])
+	var out: Array[String] = []
+	for n in names:
+		var p := pretty(str(n))
+		if not out.has(p):
+			out.append(p)
+	return " / ".join(out) if not out.is_empty() else "-"
 
 
 static func _action(name: String, events: Array) -> void:
@@ -43,28 +107,3 @@ static func _action(name: String, events: Array) -> void:
 	InputMap.add_action(name, 0.2)
 	for e in events:
 		InputMap.action_add_event(name, e)
-
-
-static func _key(code: Key) -> InputEventKey:
-	var e := InputEventKey.new()
-	e.physical_keycode = code
-	return e
-
-
-static func _axis(axis: JoyAxis, value: float) -> InputEventJoypadMotion:
-	var e := InputEventJoypadMotion.new()
-	e.axis = axis
-	e.axis_value = value
-	return e
-
-
-static func _mouse(button: MouseButton) -> InputEventMouseButton:
-	var e := InputEventMouseButton.new()
-	e.button_index = button
-	return e
-
-
-static func _button(button: JoyButton) -> InputEventJoypadButton:
-	var e := InputEventJoypadButton.new()
-	e.button_index = button
-	return e

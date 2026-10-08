@@ -320,9 +320,13 @@ func _host_tick(dt: float) -> void:
 		var inp := _sample_input()
 		_ball_input(inp, dt)
 		if inp.get("tackle", false):
-			_sv_tackle(1, _stick_side(inp))
+			_sv_tackle(1, int(inp.get("side", _stick_side(inp))))
 		if inp.get("dive", false):
 			_sv_dive(1)
+		if inp.get("spin", false):
+			_sv_counter(1, AthleteState.Status.SPIN)
+		if inp.get("spin_side", 0) != 0:
+			_sv_spin_side(1, int(inp["spin_side"]))
 		if inp.get("lateral", false):
 			_sv_lateral(1, inp.get("yaw", 0.0))
 		if inp.get("strip", false):
@@ -400,11 +404,11 @@ func _host_tick(dt: float) -> void:
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
-	var play_i := PackedInt32Array([-1, 0, 0, 0, 0, 0, 0, 0, 0])
+	var play_i := PackedInt32Array([-1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 	var play_f := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 	if flow != null:
 		var v := flow.view()
-		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"], v["down"], v["score0"], v["score1"], v["try"]])
+		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"], v["down"], v["score0"], v["score1"], v["try"], v["pass_used"]])
 		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"], v["gain"]])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
@@ -455,10 +459,17 @@ func _client_tick(dt: float) -> void:
 	var inp := _sample_input()
 	_ball_input(inp, dt)
 	if inp.get("tackle", false):
-		var tk_side := _stick_side(inp)
+		var tk_side := int(inp.get("side", _stick_side(inp)))
 		_send(func(): if cl_connected: rpc_id(1, "rpc_tackle", tk_side))
 	if inp.get("dive", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
+	if inp.get("spin", false):
+		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.SPIN))
+	if inp.get("spin_side", 0) != 0:
+		var pop := int(inp["spin_side"])
+		if cl_state.status == AthleteState.Status.SPIN:
+			cl_state.spin_side = pop      # predicted: the pop happens on our screen right away
+		_send(func(): if cl_connected: rpc_id(1, "rpc_spin_side", pop))
 	if inp.get("lateral", false):
 		var lat_yaw: float = inp.get("yaw", 0.0)
 		_send(func(): if cl_connected: rpc_id(1, "rpc_lateral", lat_yaw))
@@ -518,7 +529,7 @@ func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ba
 		team_view[ids[i]] = int(data[i * SNAP_STRIDE + 15])
 	play_view = {} if play_i[0] < 0 else {"phase": play_i[0], "offense": play_i[1], "dir": play_i[2],
 		"qb": play_i[3], "play_no": play_i[4], "down": play_i[5], "score0": play_i[6], "score1": play_i[7],
-		"try": play_i[8], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2], "gain": play_f[3]}
+		"try": play_i[8], "pass_used": play_i[9], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2], "gain": play_f[3]}
 	latest_tick = tick
 	snap_buffer.append({"tick": tick, "players": players, "ball_i": ball_i, "ball_f": ball_f})
 	latest_holder = ball_i[1] if ball_i[0] == Ball.HELD else 0
@@ -583,6 +594,12 @@ func rpc_try_pick(points: int) -> void:
 func rpc_strip() -> void:
 	if mode == Mode.HOST:
 		_sv_strip(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "reliable")
+func rpc_spin_side(side: int) -> void:
+	if mode == Mode.HOST:
+		_sv_spin_side(multiplayer.get_remote_sender_id(), side)
 
 
 @rpc("any_peer", "reliable")
@@ -978,6 +995,13 @@ func _sv_counter(id: int, kind: int) -> void:
 	_log_event("%s: %s%s" % [_name(id), name, " (weak)" if p.counter_weak else ""])
 
 
+## Mid-spin, a hand button picks the side to pop out to (same as holding the stick that way).
+func _sv_spin_side(id: int, side: int) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p != null and p.state.status == AthleteState.Status.SPIN:
+		p.state.spin_side = clampi(side, -1, 1)
+
+
 func _sv_stiffarm(id: int, side := 0) -> void:
 	var p: SvPlayer = sv_players.get(id)
 	var wrapped_now: bool = p != null and p.state.status == AthleteState.Status.WRAPPED
@@ -1033,6 +1057,10 @@ func _sv_take(id: int) -> void:
 func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> void:
 	if ball_kind != Ball.HELD or ball_holder != id or not sv_players.has(id) or not _live():
 		return
+	if flow != null:
+		if not flow.can_pass(id):
+			return        # one forward pass per play, from behind the line
+		flow.pass_thrown = true
 	var pos: Vector2 = sv_players[id].state.pos
 	ball_p0 = Vector3(pos.x, float(Tuning.section("throw")["release_height"]), pos.y)
 	ball_yaw = yaw
@@ -1195,6 +1223,19 @@ func local_has_ball() -> bool:
 	return mode == Mode.CLIENT and latest_holder == local_id and local_id != 0
 
 
+## Holding the ball with the forward pass still available (decides what the aim button does).
+func local_can_pass() -> bool:
+	if not local_has_ball():
+		return false
+	if mode == Mode.HOST:
+		return flow == null or flow.can_pass(1)
+	if play_view.is_empty():
+		return true       # sandbox: no rules
+	if int(play_view["phase"]) != PlayFlow.Phase.LIVE or int(play_view["pass_used"]) != 0 or local_team() != int(play_view["offense"]):
+		return false
+	return (local_state().pos.y - float(play_view["los"])) * int(play_view["dir"]) <= 0.0
+
+
 ## Aim, charge and release. Runs once per tick on whoever is playing locally.
 ## AIM mode: the camera pitch is the launch angle and holding the throw button sets
 ## power. HOLD mode: the old charge-for-distance throw.
@@ -1206,7 +1247,7 @@ func _ball_input(inp: Dictionary, dt: float) -> void:
 			_send(func(): if cl_connected: rpc_id(1, "rpc_take_ball"))
 
 	var th := Tuning.section("throw")
-	var aiming: bool = inp.get("aiming", false) and local_has_ball()
+	var aiming: bool = inp.get("aiming", false) and local_can_pass()
 	var yaw: float = inp.get("yaw", 0.0)
 	var lob: bool = inp.get("lob", false)
 	var holding: bool = aiming and inp.get("throw", false)
