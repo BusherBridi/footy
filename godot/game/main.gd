@@ -1,6 +1,7 @@
 extends Node3D
 ## Entry point: builds the placeholder world, then hosts or joins a match.
-## Command line (after `--`): --host, --join=IP, --port=N, --bot, --log,
+## Command line (after `--`): --match (play vs bots), --autoplay (the AI plays your
+## athlete too), --host (sandbox), --join=IP, --port=N, --bot, --log,
 ## --lat=MS, --loss=PCT for fake lag. Bots: --bot (wander), --route[=go|out|in|curl|post]
 ## (receiver), --qb (takes the ball and throws; combine with --bot or --route).
 
@@ -24,6 +25,9 @@ var _strip_latch := false
 var _lateral_latch := false
 var _hurdle_latch := false
 var event_label := Label.new()
+var play_view := PlayView.new()
+var match_hud := Label.new()
+var _seen_play := -1
 var _event_time := 0.0
 var _take_latch := false
 
@@ -62,7 +66,10 @@ func _ready() -> void:
 	if args.has("loss"):
 		Tuning.data["net"]["sim_loss_pct"] = float(args["loss"])
 
-	if args.has("host"):
+	session.autopilot = args.has("autoplay")
+	if args.has("match"):
+		_host_match()
+	elif args.has("host"):
 		_host()
 		for i in int(args.get("bots", 0)):
 			session.host_add_bot()
@@ -89,6 +96,12 @@ func _host() -> void:
 		status.text = "Host failed: %s" % error_string(err)
 		return
 	menu.hide()
+
+
+func _host_match() -> void:
+	_host()
+	if session.mode == NetSession.Mode.HOST:
+		session.start_match()
 
 
 func _join(ip: String) -> void:
@@ -168,6 +181,7 @@ func _build_world() -> void:
 
 	add_child(camera)
 	camera.cam.current = true
+	add_child(play_view)
 
 
 func _build_ui() -> void:
@@ -181,20 +195,30 @@ func _build_ui() -> void:
 	event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	event_label.add_theme_font_size_override("font_size", 22)
 	layer.add_child(event_label)
+	match_hud.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	match_hud.position = Vector2(-350, 8)
+	match_hud.custom_minimum_size = Vector2(700, 0)
+	match_hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	match_hud.add_theme_font_size_override("font_size", 24)
+	layer.add_child(match_hud)
+	event_label.position.y = 96
 	hud.position = Vector2(12, 8)
 	hud.add_theme_font_size_override("font_size", 18)
 	layer.add_child(hud)
 
 	menu.position = Vector2(12, 150)
 	menu.custom_minimum_size = Vector2(260, 0)
+	var match_btn := Button.new()
+	match_btn.text = "Play vs bots"
+	match_btn.pressed.connect(_host_match)
 	var host_btn := Button.new()
-	host_btn.text = "Host"
+	host_btn.text = "Host sandbox"
 	host_btn.pressed.connect(_host)
 	ip_edit.text = "127.0.0.1"
 	var join_btn := Button.new()
 	join_btn.text = "Join"
 	join_btn.pressed.connect(func(): _join(ip_edit.text))
-	for c in [host_btn, ip_edit, join_btn, status]:
+	for c in [match_btn, host_btn, ip_edit, join_btn, status]:
 		menu.add_child(c)
 	layer.add_child(menu)
 
@@ -242,6 +266,7 @@ func _physics_process(_delta: float) -> void:
 func _process(delta: float) -> void:
 	_event_time -= delta
 	event_label.visible = _event_time > 0.0
+	_update_match_view()
 	camera.set_qb(session.local_has_ball())
 	camera.set_aiming(session.aim_active)
 	reticle.visible = session.aim_active
@@ -258,9 +283,48 @@ func _process(delta: float) -> void:
 	var bot_tag := ""
 	if brain:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
-	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nHost only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive, R/Y strip (help a wrap).  Z/LB lateral: pitch it backward or sideways, in the camera direction.  With the ball: F/X stiff arm (hold the stick left/right to cover that flank), G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE take ball (temp snap), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
+	hud.add_theme_font_size_override("font_size", 14)
+	hud.position.y = 40
+	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nWASD/left stick move, Shift/RT sprint, mouse/right stick look, F5 reload tuning\nSandbox host only: B add receiver bot, N add chaser bot, V remove bots\nDefence: F/X tackle, G/B dive, R/Y strip (help a wrap).  Z/LB lateral: pitch it backward or sideways, in the camera direction.  With the ball: F/X stiff arm (hold the stick left/right to cover that flank), G/B spin (hold left/right to pop out that way), T/Y truck, Space/A hurdle\nE snap (match) / take ball (sandbox), hold RMB/LT aim, look up/down = angle, hold LMB/RT = power, release to throw (let go of aim first to cancel), C camera, F2 throw mode, Q/RB bullet-lob (hold mode only)" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
-		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING"][int(s.status)],
+		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING", "SET"][int(s.status)],
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),
 		"ANGLE+POWER (look = angle, hold = power)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge = distance)",
 		int(session.throw_charge * 100.0), camera.profile_name()]
+
+
+## Match HUD line, field markings, and turning the camera around for each new play.
+func _update_match_view() -> void:
+	var v := session.get_play_view()
+	var f := Tuning.section("field")
+	var width: float = float(f["width_yards"]) * float(f["yard_m"])
+	var qb_pos: Variant = null
+	if not v.is_empty() and session.athletes.has(int(v["qb"])):
+		qb_pos = session.athletes[int(v["qb"])].position
+	play_view.update_view(v, width, float(Tuning.section("match")["rush_time"]), qb_pos)
+	if v.is_empty():
+		match_hud.text = ""
+		return
+	var my_team := session.local_team()
+	var on_offense := my_team == int(v["offense"])
+	if int(v["play_no"]) != _seen_play and int(v["phase"]) == PlayFlow.Phase.PRE_SNAP:
+		_seen_play = int(v["play_no"])
+		# Face the way your athlete is lined up (downfield on offense, at the offense on defense).
+		var h := session.local_state().heading
+		camera.yaw = atan2(-h.x, -h.y)
+	var team_name: String = NetSession.TEAM_NAMES[my_team] if my_team >= 0 else "?"
+	var role := ""
+	if on_offense:
+		role = "OFFENSE (you're the QB)" if int(v["qb"]) == session.local_id else "OFFENSE"
+	else:
+		role = "DEFENSE (you're the linebacker)"
+	var phase_text := ""
+	match int(v["phase"]):
+		PlayFlow.Phase.PRE_SNAP:
+			phase_text = "Press E to snap" if int(v["qb"]) == session.local_id else "Waiting for the snap"
+		PlayFlow.Phase.LIVE:
+			var rush := float(v["rush"])
+			phase_text = ("Rush in %.1f" % rush) if rush > 0.0 else "LIVE"
+		PlayFlow.Phase.DEAD:
+			phase_text = "Play over"
+	match_hud.text = "%s  %s  |  %s" % [team_name, role, phase_text]

@@ -11,6 +11,8 @@ func build(f: Dictionary) -> void:
 	var width: float = f["width_yards"] * yard
 	var ez: float = f["endzone_yards"] * yard
 
+	var margin: float = f.get("oob_margin_m", 0.0)
+	_box(Vector3(width + 2.0 * margin, 0.08, length + 2.0 * ez + 2.0 * margin), Vector3(0, -0.07, 0), Color(0.1, 0.3, 0.13))
 	_box(Vector3(width, 0.1, length + 2.0 * ez), Vector3(0, -0.05, 0), Color(0.15, 0.45, 0.2))
 	for side in [-1.0, 1.0]:
 		_box(Vector3(width, 0.11, ez), Vector3(0, -0.05, side * (length + ez) * 0.5), Color(0.15, 0.3, 0.55) if side < 0 else Color(0.55, 0.2, 0.2))

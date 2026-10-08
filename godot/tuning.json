@@ -3,7 +3,8 @@
     "yard_m": 0.9144,
     "length_yards": 60,
     "width_yards": 30,
-    "endzone_yards": 8
+    "endzone_yards": 8,
+    "oob_margin_m": 3.0
   },
   "movement": {
     "run_speed": 7.0,
@@ -36,7 +37,8 @@
     "spin_side_input": 0.35,
     "spin_side_cross": 0.35,
     "wrap_speed_mult": 0.4,
-    "wrap_drain": 0.4
+    "wrap_drain": 0.4,
+    "carry_speed_mult": 0.95
   },
   "camera": {
     "distance": 7.0,
@@ -233,5 +235,59 @@
     "stiff_behind_mult": 0.0,
     "stiff_unset_mult": 0.7,
     "stiff_far_side_mult": 0.25
+  },
+  "match": {
+    "team_size": 5,
+    "start_yard": 15,
+    "play_clock": 10.0,
+    "min_set_time": 0.5,
+    "rush_time": 3.0,
+    "dead_time": 2.5,
+    "barrier_margin": 0.3,
+    "max_play_time": 30.0,
+    "receiver_x_m": [
+      -11.0,
+      -5.0,
+      5.0,
+      11.0
+    ],
+    "receiver_back_y": 1.0,
+    "qb_back_y": 5.0,
+    "defense_depth_y": 6.0,
+    "mlb_depth_y": 5.0,
+    "spot_margin_y": 1.0
+  },
+  "ai": {
+    "snap_delay_min": 1.0,
+    "snap_delay_max": 2.5,
+    "qb_dropback_m": 3.0,
+    "qb_min_hold": 1.0,
+    "qb_max_hold": 4.0,
+    "open_sep_m": 2.5,
+    "min_open_sep_m": 1.5,
+    "pressure_m": 3.5,
+    "lob_min_dist": 22.0,
+    "throw_error_m": 1.0,
+    "cover_cushion_m": 1.5,
+    "cover_lead_s": 0.3,
+    "carrier_avoid_radius": 7.0,
+    "sideline_avoid_m": 2.5,
+    "carrier_sprint_stamina": 0.25,
+    "counter_range": 2.6,
+    "counter_wait": 0.8,
+    "truck_chance": 0.5,
+    "spin_chance": 0.3,
+    "hurdle_chance": 0.5,
+    "lateral_chance": 0.25,
+    "lateral_range_m": 9.0,
+    "route_names": [
+      "go",
+      "out",
+      "in",
+      "curl",
+      "post"
+    ],
+    "cover_react_s": 0.25,
+    "cover_sprint_gap_m": 3.0
   }
 }

@@ -46,10 +46,16 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if down:
 		want = Vector2.ZERO
 		mag = 0.0
+	if s.status == AthleteState.Status.SET:
+		# Lined up before the snap: nobody moves (the game enforces it, no penalties).
+		s.speed = 0.0
+		return
 
 	var sprint_ok := s.status == AthleteState.Status.OK or s.status == AthleteState.Status.HURDLE
 	var sprinting: bool = sprint and s.stamina > 0.0 and mag > 0.1 and sprint_ok
 	var top: float = run_speed * (m["sprint_multiplier"] if sprinting else 1.0)
+	if s.carrying:
+		top *= m["carry_speed_mult"]
 	if stumbling:
 		top *= m["stumble_speed_mult"]
 	elif s.status == AthleteState.Status.TRUCK:
@@ -123,7 +129,8 @@ static func _steer_and_accelerate(s: AthleteState, want: Vector2, mag: float, to
 
 static func _clamp_to_field(s: AthleteState, f: Dictionary) -> void:
 	var yard: float = f["yard_m"]
-	var half_len: float = (f["length_yards"] * 0.5 + f["endzone_yards"]) * yard
-	var half_wid: float = f["width_yards"] * 0.5 * yard
+	var margin: float = f.get("oob_margin_m", 0.0)     # room to step out of bounds
+	var half_len: float = (f["length_yards"] * 0.5 + f["endzone_yards"]) * yard + margin
+	var half_wid: float = f["width_yards"] * 0.5 * yard + margin
 	s.pos.x = clampf(s.pos.x, -half_wid, half_wid)
 	s.pos.y = clampf(s.pos.y, -half_len, half_len)

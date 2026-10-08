@@ -6,6 +6,11 @@ extends Node3D
 var _body_mat := StandardMaterial3D.new()
 var _ring := MeshInstance3D.new()
 var _arm := MeshInstance3D.new()
+var _marker := MeshInstance3D.new()
+var _team := -2
+var _local := false
+
+const TEAM_COLORS := [Color(0.95, 0.5, 0.15), Color(0.25, 0.45, 0.95)]
 
 
 func _init() -> void:
@@ -46,6 +51,20 @@ func _init() -> void:
 	_arm.position = Vector3(0.0, 1.25, -0.85)
 	_arm.visible = false
 	add_child(_arm)
+
+	# A marker over your own head, so you can find yourself in a crowd.
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.3
+	cone.bottom_radius = 0.0
+	cone.height = 0.45
+	var mm := StandardMaterial3D.new()
+	mm.albedo_color = Color(1, 1, 1)
+	mm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cone.material = mm
+	_marker.mesh = cone
+	_marker.position.y = 2.4
+	_marker.visible = false
+	add_child(_marker)
 	_ring.mesh = disc
 	_ring.position.y = 0.04
 	add_child(_ring)
@@ -53,6 +72,18 @@ func _init() -> void:
 
 func set_color(c: Color) -> void:
 	_body_mat.albedo_color = c
+
+
+## Match colours: Orange (0) or Blue (1); your own athlete is lighter and marked.
+func set_team(team: int, is_local: bool) -> void:
+	if team == _team and is_local == _local:
+		return
+	_team = team
+	_local = is_local
+	_marker.visible = is_local and team >= 0
+	if team >= 0:
+		var c: Color = TEAM_COLORS[team]
+		set_color(c.lightened(0.35) if is_local else c)
 
 
 func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false) -> void:

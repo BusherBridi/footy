@@ -3,7 +3,7 @@ extends RefCounted
 ## Everything the movement step needs. Plain data so it can be copied for
 ## client prediction and replayed on the server.
 
-enum Status { OK, STUMBLE, DOWN, DIVING, SPIN, TRUCK, HURDLE, POP, WRAPPED, HOLDING }
+enum Status { OK, STUMBLE, DOWN, DIVING, SPIN, TRUCK, HURDLE, POP, WRAPPED, HOLDING, SET }
 
 var pos := Vector2.ZERO          # x, z on the field plane (metres)
 var heading := Vector2(0, -1)    # unit direction of travel / facing
@@ -15,7 +15,8 @@ var prev_dir := Vector2.ZERO     # last frame's stick direction, for flick detec
 var status := Status.OK          # set by the referee (tackles); movement just obeys it
 var status_timer := 0.0
 var spin_side := 0                # -1 left, 0 straight, +1 right: where the spin will pop out
-var juke_timer := 0.0            # >0 while a juke is "live": dives pass through, close tackles hit harder
+var juke_timer := 0.0
+var carrying := false            # holding the ball: runs a little slower so pursuit angles work            # >0 while a juke is "live": dives pass through, close tackles hit harder
 
 
 func copy() -> AthleteState:
@@ -31,4 +32,5 @@ func copy() -> AthleteState:
 	s.status_timer = status_timer
 	s.juke_timer = juke_timer
 	s.spin_side = spin_side
+	s.carrying = carrying
 	return s

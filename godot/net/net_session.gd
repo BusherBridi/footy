@@ -35,11 +35,27 @@ class SvPlayer:
 	var fx := 0                  # visual cue: 1 = stiff arm out
 	var dodged := false          # this dive was already juked past (announce once)
 	var fx_timer := 0.0
+	var team := -1               # 0 or 1 in a match; -1 in the sandbox
+
+	func reset_play_fields() -> void:
+		tackle_cd = 0.0
+		dive_cd = 0.0
+		stiff_timer = 0.0
+		wrap_holder = 0
+		wrap_hit = 0.0
+		wrap_of = 0
+		counter_cd = 0.0
+		counter_weak = false
+		stiff_weak = false
+		stiff_side = 0
+		fx = 0
+		fx_timer = 0.0
+		dodged = false
 
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
 
-const SNAP_STRIDE := 16   # floats per player (id travels in a separate int array)
+const SNAP_STRIDE := 18   # floats per player (id travels in a separate int array)
 
 var mode := Mode.NONE
 var local_id := 0
@@ -47,6 +63,17 @@ var input_provider: Callable          # () -> [Vector2 world move, bool sprint]
 var athlete_parent: Node3D
 var athletes := {}                    # peer id -> Athlete (visual)
 var log_enabled := false
+
+# Match (null in the sandbox)
+var flow: PlayFlow = null
+var autopilot := false                # the host's own athlete is played by the AI (spectate / tests)
+var rng := RandomNumberGenerator.new()
+var dead_reason := ""                 # set when the ball is ruled dead; the play flow reads it
+var dead_spot := Vector2.ZERO
+var dead_team := -1                   # team holding the ball when it was ruled dead
+var play_view := {}                   # client: latest play state from the server
+var team_view := {}                   # client: id -> team from the latest snapshot
+var cl_team := -1
 
 # Server side
 var sv_players := {}                  # peer id -> SvPlayer
@@ -174,10 +201,49 @@ func _on_lost() -> void:
 	disconnected.emit()
 
 
+## Start a match on the host: two teams, bots in every empty slot, first play set up.
+func start_match() -> void:
+	if mode != Mode.HOST:
+		return
+	rng.randomize()
+	host_clear_bots()
+	flow = PlayFlow.new(self)
+	flow.start()
+	if autopilot:
+		sv_bots[1] = TeamBot.new()
+
+
+func add_team_bot(team: int) -> int:
+	var id := _next_bot_id
+	_next_bot_id -= 1
+	_add_sv_player(id)
+	sv_players[id].team = team
+	sv_bots[id] = TeamBot.new()
+	return id
+
+
+func remove_bot(id: int) -> void:
+	sv_players.erase(id)
+	sv_bots.erase(id)
+	_remove_athlete(id)
+
+
+func announce(text: String) -> void:
+	_announce(text)
+
+
+func name_of(id: int) -> String:
+	return _name(id)
+
+
+func _live() -> bool:
+	return flow == null or flow.is_live()
+
+
 ## Dev helper: a receiver driven by the host itself. It uses the same movement
 ## code and input queue as a real player, but not the network connection.
 func host_add_bot(role := "") -> void:
-	if mode != Mode.HOST:
+	if mode != Mode.HOST or flow != null:
 		return
 	var id := _next_bot_id
 	_next_bot_id -= 1
@@ -191,7 +257,11 @@ func host_add_bot(role := "") -> void:
 
 
 func host_clear_bots() -> void:
+	if flow != null:
+		return
 	for id in sv_bots:
+		if id == 1:
+			continue
 		sv_players.erase(id)
 		_remove_athlete(id)
 	sv_bots.clear()
@@ -199,11 +269,15 @@ func host_clear_bots() -> void:
 
 func _on_peer_connected(id: int) -> void:
 	_add_sv_player(id)
+	if flow != null:
+		flow.on_join(id)
 
 
 func _on_peer_disconnected(id: int) -> void:
 	sv_players.erase(id)
 	_remove_athlete(id)
+	if flow != null:
+		flow.on_leave(id)
 
 
 func _add_sv_player(id: int) -> void:
@@ -239,23 +313,24 @@ func _sample_input() -> Dictionary:
 
 
 func _host_tick(dt: float) -> void:
-	var inp := _sample_input()
-	_ball_input(inp, dt)
-	if inp.get("tackle", false):
-		_sv_tackle(1, _stick_side(inp))
-	if inp.get("dive", false):
-		_sv_dive(1)
-	if inp.get("lateral", false):
-		_sv_lateral(1, inp.get("yaw", 0.0))
-	if inp.get("strip", false):
-		_sv_strip(1)
-	if inp.get("truck", false):
-		_sv_counter(1, AthleteState.Status.TRUCK)
-	if inp.get("hurdle", false):
-		_sv_counter(1, AthleteState.Status.HURDLE)
-	var me: SvPlayer = sv_players[1]
-	me.last_seq += 1
-	me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
+	if not sv_bots.has(1):
+		var inp := _sample_input()
+		_ball_input(inp, dt)
+		if inp.get("tackle", false):
+			_sv_tackle(1, _stick_side(inp))
+		if inp.get("dive", false):
+			_sv_dive(1)
+		if inp.get("lateral", false):
+			_sv_lateral(1, inp.get("yaw", 0.0))
+		if inp.get("strip", false):
+			_sv_strip(1)
+		if inp.get("truck", false):
+			_sv_counter(1, AthleteState.Status.TRUCK)
+		if inp.get("hurdle", false):
+			_sv_counter(1, AthleteState.Status.HURDLE)
+		var me: SvPlayer = sv_players[1]
+		me.last_seq += 1
+		me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
 
 	for id in sv_players:
 		var q: SvPlayer = sv_players[id]
@@ -266,7 +341,11 @@ func _host_tick(dt: float) -> void:
 		q.fx_timer = maxf(0.0, q.fx_timer - dt)
 		if q.fx_timer <= 0.0:
 			q.fx = 0
-	for id in sv_bots:
+	for id in sv_bots.keys():
+		if sv_bots[id] is TeamBot:
+			if flow != null and sv_players.has(id):
+				_team_bot_tick(id, dt)
+			continue
 		var bp: SvPlayer = sv_players[id]
 		var ctx := {"heading": bp.state.heading, "holding": bp.wrap_of != 0}
 		if ball_kind == Ball.HELD and ball_holder != id and sv_players.has(ball_holder):
@@ -296,12 +375,15 @@ func _host_tick(dt: float) -> void:
 			p.last_move = e[1]
 			p.last_sprint = e[2]
 		# else: starved, repeat the last input
+		p.state.carrying = ball_kind == Ball.HELD and ball_holder == id
 		Movement.step(p.state, p.last_move, p.last_sprint, dt, Tuning.data)
 
 	_wrap_tick()
 	_check_dives()
 	sv_tick += 1
 	_ball_tick(dt)
+	if flow != null:
+		flow.tick(dt)
 	var ids := PackedInt32Array()
 	var data := PackedFloat32Array()
 	for id in sv_players:
@@ -309,14 +391,55 @@ func _host_tick(dt: float) -> void:
 		var s := p.state
 		ids.append(id)
 		data.append_array([s.pos.x, s.pos.y, s.heading.x, s.heading.y, s.speed, s.stamina,
-			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, s.juke_timer, float(s.spin_side), p.fx, p.acked])
+			s.cut_timer, s.cut_cooldown, s.prev_dir.x, s.prev_dir.y, s.status, s.status_timer, s.juke_timer, float(s.spin_side), p.fx, p.team, 1.0 if s.carrying else 0.0, p.acked])
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
+	var play_i := PackedInt32Array([-1, 0, 0, 0, 0])
+	var play_f := PackedFloat32Array([0.0, 0.0, 0.0])
+	if flow != null:
+		var v := flow.view()
+		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"]])
+		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"]])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
 		var tick := sv_tick
-		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_snapshot", tick, ids, data, ball_i, ball_f))
+		_send(func(): if multiplayer.get_peers().has(peer_id): rpc_id(peer_id, "rpc_snapshot", tick, ids, data, ball_i, ball_f, play_i, play_f))
+
+
+## A match bot: build its picture of the field, run its brain, apply its inputs.
+func _team_bot_tick(id: int, dt: float) -> void:
+	var bp: SvPlayer = sv_players[id]
+	var bi: Dictionary = sv_bots[id].think(flow.bot_context(id), dt, Tuning.data)
+	bp.last_seq += 1
+	bp.queue.append([bp.last_seq, bi["move"], bi["sprint"]])
+	if bi.get("take", false):
+		_sv_take(id)
+	if bi.has("pass_to"):
+		_bot_pass(id, bi["pass_to"], bi.get("lob", false))
+	if bi.get("lateral", false):
+		_sv_lateral(id, bi.get("yaw", 0.0))
+	if bi.get("tackle", false):
+		_sv_tackle(id, int(bi.get("side", 0)))
+	if bi.get("dive", false):
+		_sv_dive(id)
+	if bi.get("strip", false):
+		_sv_strip(id)
+	if bi.get("truck", false):
+		_sv_counter(id, AthleteState.Status.TRUCK)
+	if bi.get("hurdle", false):
+		_sv_counter(id, AthleteState.Status.HURDLE)
+
+
+## Bots throw with the charge-for-distance model: it lands exactly where they aim.
+func _bot_pass(id: int, target: Vector2, lob: bool) -> void:
+	if not sv_players.has(id):
+		return
+	var th := Tuning.section("throw")
+	var rel: Vector2 = target - sv_players[id].state.pos
+	var dist := clampf(rel.length(), float(th["min_range"]), float(th["max_range"]))
+	var yaw := atan2(-rel.x, -rel.y)
+	_sv_throw(id, inverse_lerp(float(th["min_range"]), float(th["max_range"]), dist), yaw, lob, -1.0)
 
 
 func _client_tick(dt: float) -> void:
@@ -342,6 +465,7 @@ func _client_tick(dt: float) -> void:
 	var sprint: bool = inp["sprint"]
 	cl_seq += 1
 	cl_prev_pos = cl_state.pos
+	cl_state.carrying = local_has_ball()
 	Movement.step(cl_state, move, sprint, dt, Tuning.data)
 	cl_pending.append([cl_seq, move, sprint])
 	cl_sent_time[cl_seq] = _now()
@@ -375,12 +499,15 @@ func rpc_inputs(batch: PackedFloat32Array) -> void:
 
 
 @rpc("authority", "unreliable")
-func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ball_i: PackedInt32Array, ball_f: PackedFloat32Array) -> void:
+func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ball_i: PackedInt32Array, ball_f: PackedFloat32Array, play_i: PackedInt32Array, play_f: PackedFloat32Array) -> void:
 	if mode != Mode.CLIENT or tick <= latest_tick:
 		return
 	var players := {}
 	for i in ids.size():
 		players[ids[i]] = data.slice(i * SNAP_STRIDE, (i + 1) * SNAP_STRIDE)
+		team_view[ids[i]] = int(data[i * SNAP_STRIDE + 15])
+	play_view = {} if play_i[0] < 0 else {"phase": play_i[0], "offense": play_i[1], "dir": play_i[2],
+		"qb": play_i[3], "play_no": play_i[4], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2]}
 	latest_tick = tick
 	snap_buffer.append({"tick": tick, "players": players, "ball_i": ball_i, "ball_f": ball_f})
 	latest_holder = ball_i[1] if ball_i[0] == Ball.HELD else 0
@@ -467,8 +594,12 @@ func _announce(text: String) -> void:
 ## it at anyone else (or at nothing) is a committed whiff.
 func _sv_tackle(id: int, side := 0) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
+	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0 or not _live():
 		return
+	if p.state.status == AthleteState.Status.DIVING:
+		return        # mid-dive you're committed: the dive itself is your tackle
+	if flow != null and ball_kind == Ball.HELD and ball_holder != id and not flow.can_tackle(id, ball_holder):
+		return        # the carrier is a teammate (blocking comes later)
 	var tk: Dictionary = Tuning.section("tackle")
 	if p.wrap_of != 0:
 		# Holding a carrier: pressing tackle again lets go.
@@ -614,7 +745,10 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 
 
 ## Stand-in for the end of the play: the ball is set down where the carrier ended up.
-func _set_ball_down(spot: Vector2) -> void:
+func _set_ball_down(spot: Vector2, reason := "Tackled") -> void:
+	dead_reason = reason
+	dead_spot = spot
+	dead_team = sv_players[ball_holder].team if ball_kind == Ball.HELD and sv_players.has(ball_holder) else -1
 	ball_kind = Ball.LOOSE
 	ball_holder = 0
 	ball_live = false
@@ -677,7 +811,7 @@ func _wrap_tick() -> void:
 			c.state.status_timer = tk["down_time"]
 			var holder_id := c.wrap_holder
 			_end_wrap(cid, false)
-			_set_ball_down(c.state.pos)
+			_set_ball_down(c.state.pos, "Worn down")
 			_announce("WORN DOWN: %s ran out of stamina with %s hanging on" % [_name(cid), _name(holder_id)])
 			continue
 		h.state.pos = c.state.pos + c.wrap_local.rotated(c.state.heading.angle()) * float(tk["wrap_offset"])
@@ -696,7 +830,7 @@ func _after_dive(t: AthleteState, dive: bool) -> void:
 
 func _sv_dive(id: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.state.status != AthleteState.Status.OK:
+	if p == null or p.state.status != AthleteState.Status.OK or not _live():
 		return
 	if ball_kind == Ball.HELD and ball_holder == id:
 		_sv_counter(id, AthleteState.Status.SPIN)     # same button: with the ball it's a spin
@@ -722,6 +856,8 @@ func _check_dives() -> void:
 		var p: SvPlayer = sv_players[id]
 		if id == ball_holder or p.state.status != AthleteState.Status.DIVING:
 			continue
+		if flow != null and not flow.can_tackle(id, ball_holder):
+			continue
 		if p.state.pos.distance_to(carrier.state.pos) <= float(tk["dive_hit_radius"]):
 			var hurdled: bool = carrier.state.status == AthleteState.Status.HURDLE and not carrier.counter_weak
 			if carrier.state.juke_timer > 0.0 or hurdled:
@@ -738,9 +874,11 @@ func _check_dives() -> void:
 ## carrier, the better the odds. A failed strip does nothing (their hit never counts).
 func _sv_strip(id: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0:
+	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0 or not _live():
 		return
 	if ball_kind != Ball.HELD or ball_holder == id or not sv_players.has(ball_holder):
+		return
+	if flow != null and not flow.can_tackle(id, ball_holder):
 		return
 	var cp: SvPlayer = sv_players[ball_holder]
 	var tk: Dictionary = Tuning.section("tackle")
@@ -765,7 +903,7 @@ func _sv_strip(id: int) -> void:
 ## Carrier counters that put you in a movement state: spin, truck, hurdle.
 func _sv_counter(id: int, kind: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or p.counter_cd > 0.0:
+	if p == null or p.counter_cd > 0.0 or not _live():
 		return
 	var wrapped_now: bool = p.state.status == AthleteState.Status.WRAPPED
 	if p.state.status != AthleteState.Status.OK and not (wrapped_now and (kind == AthleteState.Status.SPIN or kind == AthleteState.Status.TRUCK)):
@@ -833,8 +971,14 @@ func _sv_stiffarm(id: int, side := 0) -> void:
 	p.fx_timer = tk["stiff_fx_time"]
 
 
+const TEAM_NAMES := ["Orange", "Blue"]
+
+
 func _name(id: int) -> String:
-	return "player %d" % id if id > 0 else "bot %d" % -id
+	var n := "player %d" % id if id > 0 else "bot %d" % -id
+	if flow != null and sv_players.has(id) and sv_players[id].team >= 0:
+		n += " (%s)" % TEAM_NAMES[sv_players[id].team]
+	return n
 
 
 # ------------------------------------------------------------------------ ball
@@ -843,13 +987,16 @@ func _name(id: int) -> String:
 func _sv_take(id: int) -> void:
 	if not sv_players.has(id):
 		return
+	if flow != null:
+		flow.request_snap(id)       # in a match, E is the snap
+		return
 	ball_kind = Ball.HELD
 	ball_holder = id
 	ball_live = false
 
 
 func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> void:
-	if ball_kind != Ball.HELD or ball_holder != id or not sv_players.has(id):
+	if ball_kind != Ball.HELD or ball_holder != id or not sv_players.has(id) or not _live():
 		return
 	var pos: Vector2 = sv_players[id].state.pos
 	ball_p0 = Vector3(pos.x, float(Tuning.section("throw")["release_height"]), pos.y)
@@ -868,11 +1015,12 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 ## A pitch: a short, flat toss that may only go backward or sideways (upfield is -z).
 func _sv_lateral(id: int, yaw: float) -> void:
 	var p: SvPlayer = sv_players.get(id)
-	if p == null or ball_kind != Ball.HELD or ball_holder != id or p.state.status == AthleteState.Status.DOWN:
+	if p == null or ball_kind != Ball.HELD or ball_holder != id or p.state.status == AthleteState.Status.DOWN or not _live():
 		return
 	var th: Dictionary = Tuning.section("throw")
 	var dir := Vector2(-sin(yaw), -cos(yaw))
-	if dir.y < -sin(deg_to_rad(float(th["lateral_forward_slack_deg"]))):
+	var upfield := Vector2(0.0, -1.0) if flow == null else Vector2(0.0, float(flow.team_dir(p.team)))
+	if dir.dot(upfield) > sin(deg_to_rad(float(th["lateral_forward_slack_deg"]))):
 		_announce("%s can't pitch the ball forward" % _name(id))
 		return
 	ball_p0 = Vector3(p.state.pos.x, float(th["lateral_release_height"]), p.state.pos.y)
@@ -909,6 +1057,8 @@ func _ball_tick(dt: float) -> void:
 		for id in sv_players:
 			if id == ball_thrower and ts < float(c["thrower_grace"]):
 				continue
+			if flow != null and not flow.can_catch(id, ball_thrower):
+				continue
 			var p: SvPlayer = sv_players[id]
 			var d := CatchRules.zone_distance(p.state.pos, p.state.speed, bpos, Tuning.data)
 			if d >= 0.0:
@@ -925,7 +1075,15 @@ func _ball_tick(dt: float) -> void:
 			ball_kind = Ball.HELD
 			ball_holder = cands[0][1]
 			ball_live = false
-			_log_event("catch by %d (%.2f m from the ball, %d in range)" % [ball_holder, cands[0][0], cands.size()])
+			var cpos: Vector2 = sv_players[ball_holder].state.pos
+			var open_by := INF
+			for oid in sv_players:
+				if sv_players[oid].team != sv_players[ball_holder].team:
+					open_by = minf(open_by, sv_players[oid].state.pos.distance_to(cpos))
+			var depth := 0.0
+			if flow != null:
+				depth = (cpos.y - flow.los_z) * flow.dir() / flow.yard()
+			_log_event("catch by %s (%.2f m from the ball, %d in range) %.0f yards downfield, nearest defender %.1f m" % [_name(ball_holder), cands[0][0], cands.size(), depth, open_by])
 		return
 	if t_now >= float(fl["T"]):
 		ball_kind = Ball.LOOSE
@@ -937,6 +1095,8 @@ func _ball_tick(dt: float) -> void:
 ## An incomplete forward pass is dead; a dropped lateral is a live ball anyone can recover.
 func _loose_after_flight() -> void:
 	ball_live = ball_lateral
+	if not ball_lateral:
+		dead_reason = "incomplete"
 	ball_vel = Vector2.ZERO
 	ball_live_age = 0.0
 
@@ -950,8 +1110,9 @@ func _fumble_tick(dt: float) -> void:
 		ball_vel = ball_vel.normalized() * speed
 		var f: Dictionary = Tuning.section("field")
 		var yard: float = f["yard_m"]
-		var hl: float = (float(f["length_yards"]) * 0.5 + float(f["endzone_yards"])) * yard
-		var hw: float = float(f["width_yards"]) * 0.5 * yard
+		var margin: float = f.get("oob_margin_m", 0.0)
+		var hl: float = (float(f["length_yards"]) * 0.5 + float(f["endzone_yards"])) * yard + margin
+		var hw: float = float(f["width_yards"]) * 0.5 * yard + margin
 		ball_loose.x = clampf(ball_loose.x + ball_vel.x * dt, -hw, hw)
 		ball_loose.z = clampf(ball_loose.z + ball_vel.y * dt, -hl, hl)
 	ball_live_age += dt
@@ -1067,13 +1228,15 @@ func _state_from(a: PackedFloat32Array) -> AthleteState:
 	s.status_timer = a[11]
 	s.juke_timer = a[12]
 	s.spin_side = int(a[13])
+	s.carrying = a[16] > 0.5
 	return s
 
 
 func _reconcile(a: PackedFloat32Array) -> void:
 	var s := _state_from(a)
-	var ack := int(a[15])
+	var ack := int(a[17])
 	cl_fx = int(a[14])
+	cl_team = int(a[15])
 	if cl_state == null:
 		cl_state = s
 		cl_prev_pos = s.pos
@@ -1154,6 +1317,23 @@ func _log(line: String) -> void:
 		f.store_line(line)
 
 
+## Play state for the HUD and field markings (empty outside a match).
+func get_play_view() -> Dictionary:
+	if mode == Mode.HOST:
+		return flow.view() if flow != null else {}
+	return play_view
+
+
+func team_of_id(id: int) -> int:
+	if mode == Mode.HOST:
+		return sv_players[id].team if sv_players.has(id) else -1
+	return cl_team if id == local_id else int(team_view.get(id, -1))
+
+
+func local_team() -> int:
+	return team_of_id(local_id)
+
+
 func local_state() -> AthleteState:
 	if mode == Mode.HOST:
 		return sv_players[1].state
@@ -1168,7 +1348,9 @@ func _update_host_visuals() -> void:
 	var a := _alpha()
 	for id in sv_players:
 		var p: SvPlayer = sv_players[id]
-		_ensure_athlete(id).set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0)
+		var ath := _ensure_athlete(id)
+		ath.set_team(p.team, id == local_id)
+		ath.set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.heading, p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, ball_angle, sv_tick + a)
 
@@ -1176,6 +1358,7 @@ func _update_host_visuals() -> void:
 func _update_client_visuals(delta: float) -> void:
 	correction *= exp(-float(_net()["correction_decay"]) * delta)
 	var me := _ensure_athlete(local_id)
+	me.set_team(cl_team, true)
 	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.heading, cl_state.speed, cl_state.status, cl_fx, cl_state.juke_timer > 0.0)
 
 	if latest_tick < 0:
@@ -1213,7 +1396,9 @@ func _update_client_visuals(delta: float) -> void:
 			pos = Vector2(a[0], a[1]).lerp(pos, t)
 			heading = ah.slerp(heading, t) if ah.dot(heading) > -0.99 else heading
 			spd = lerpf(a[4], spd, t)
-		_ensure_athlete(id).set_visual(pos, heading, spd, st, fx, jk)
+		var ath := _ensure_athlete(id)
+		ath.set_team(int(b[15]), false)
+		ath.set_visual(pos, heading, spd, st, fx, jk)
 
 	var bi: PackedInt32Array = s0["ball_i"]
 	var bf: PackedFloat32Array = s0["ball_f"]
