@@ -2,7 +2,13 @@ class_name PlayFlow
 extends RefCounted
 ## Server-side play loop for a match: two teams, formations, the snap, the rush timer,
 ## what ends a play, and spotting the ball for the next one. Downs and scoring come in
-## step 4b. The session asks this object who may tackle and catch whom.
+## The session asks this object who may tackle and catch whom.
+##
+## Downs (design doc): 4 downs to reach midfield, then 4 more to score; failing turns
+## the ball over where it stands (no punts). A touchdown is 6, then the scoring team
+## runs one live try: 1 point from close in or 2 from farther out. A carrier downed in
+## his own end zone is a safety (2 points). After a score the other team starts on
+## its own 15 (there are no kickoffs).
 
 enum Phase { PRE_SNAP, LIVE, DEAD }
 
@@ -20,9 +26,16 @@ var result := ""
 var slots := {}               # team -> Array of ids; slot 0 is the QB (offense) / linebacker (defense)
 var routes := {}              # receiver id -> route name for this play
 var snap_qb_pos := Vector2.ZERO
+var down := 1
+var gain_z := 0.0             # the line to gain: midfield, then the goal line
+var score := [0, 0]
+var try_points := 0           # 0 = normal play; 1 or 2 while running a try after a touchdown
 
 var _next_offense := 0
 var _next_los_z := 0.0
+var _next_down := 1
+var _next_gain_z := 0.0
+var _next_try := 0
 
 
 func _init(session: NetSession) -> void:
@@ -89,9 +102,32 @@ func team_of(id: int) -> int:
 
 func start() -> void:
 	_assign_teams()
+	score = [0, 0]
 	offense = 0
+	try_points = 0
 	los_z = _z_at_own_yard(0, float(_m()["start_yard"]))
+	down = 1
+	gain_z = _first_gain(0, los_z)
 	_setup_play()
+
+
+## A new set of downs: aim for midfield, or the goal line once past it.
+func _first_gain(team: int, from_z: float) -> float:
+	var mid := float(Tuning.section("field")["length_yards"]) * 0.5
+	return 0.0 if yards_from_own_goal(from_z, team) < mid - 0.01 else attack_goal_z(team)
+
+
+func goal_to_go() -> bool:
+	return is_equal_approx(gain_z, attack_goal_z(offense))
+
+
+func down_text() -> String:
+	if try_points > 0:
+		return "%d-point try" % try_points
+	var nth: String = ["", "1st", "2nd", "3rd", "4th"][clampi(down, 1, 4)]
+	if goal_to_go():
+		return "%s & goal" % nth
+	return "%s & %d to midfield" % [nth, maxi(1, roundi(absf(gain_z - los_z) / yard()))]
 
 
 func _z_at_own_yard(team: int, y: float) -> float:
@@ -216,7 +252,25 @@ func _setup_play() -> void:
 	s.ball_lateral = false
 	s.ball_loose = Vector3(0.0, float(Tuning.section("throw")["ball_radius"]), los_z)
 	possession_team = offense
-	s.announce("Ball on the %s. %s" % [yard_line_text(los_z, offense), "Snap when ready" if qb_id > 0 else "Bot QB will snap"])
+	if try_points > 0:
+		var other := 3 - try_points
+		s.announce("%s TRY for %d from the %d%s" % [NetSession.TEAM_NAMES[offense], try_points,
+			roundi(_try_yard(try_points)), ("  (QB: press %d for the %d-point try)" % [other, other]) if qb_id > 0 else ""])
+	else:
+		s.announce("%s ball, %s, on the %s" % [NetSession.TEAM_NAMES[offense], down_text(), yard_line_text(los_z, offense)])
+
+
+func _try_yard(points: int) -> float:
+	return float(_m()["try1_yard"] if points == 1 else _m()["try2_yard"])
+
+
+## Before the snap of a try, the QB picks 1 point (close in) or 2 (farther out).
+func pick_try(id: int, points: int) -> void:
+	if try_points == 0 or phase != Phase.PRE_SNAP or id != qb_id or points == try_points or not (points == 1 or points == 2):
+		return
+	try_points = points
+	los_z = attack_goal_z(offense) - dir() * _try_yard(points) * yard()
+	_setup_play()
 
 
 func _place(id: int, pos: Vector2, heading: Vector2) -> void:
@@ -292,6 +346,9 @@ func tick(dt: float) -> void:
 			if phase_time >= float(_m()["dead_time"]):
 				offense = _next_offense
 				los_z = _next_los_z
+				down = _next_down
+				gain_z = _next_gain_z
+				try_points = _next_try
 				_setup_play()
 
 
@@ -342,25 +399,58 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 	phase = Phase.DEAD
 	phase_time = 0.0
 	rush_left = 0.0
-	var gained := (spot_z - los_z) * dir() / yard()
-	if touchdown:
-		_next_offense = 1 - team
-		_next_los_z = _z_at_own_yard(_next_offense, float(_m()["start_yard"]))
-		result = text
-	else:
+	var m := _m()
+	var start_yard := float(m["start_yard"])
+	_next_try = 0
+	if try_points > 0:
+		# The try is a single play: score again or not, then the other team gets the ball.
+		if touchdown and team == offense:
+			score[team] += try_points
+			result = "%s The %d-point try is good!" % [text, try_points]
+		else:
+			result = "%s. The try fails." % text
+		_kickoff_to(1 - offense)
+	elif touchdown:
+		score[team] += int(m["td_points"])
+		result = "%s +%d" % [text, int(m["td_points"])]
 		_next_offense = team
-		var margin := float(_m()["spot_margin_y"]) * yard()
+		_next_try = 1
+		_next_los_z = attack_goal_z(team) - team_dir(team) * _try_yard(1) * yard()
+		_next_down = 1
+		_next_gain_z = attack_goal_z(team)
+	elif (spot_z - own_goal_z(team)) * team_dir(team) < 0.0:
+		# Downed in your own end zone.
+		score[1 - team] += int(m["safety_points"])
+		result = "%s in the end zone. SAFETY! +%d %s" % [text, int(m["safety_points"]), NetSession.TEAM_NAMES[1 - team]]
+		_kickoff_to(1 - team)
+	else:
+		var margin := float(m["spot_margin_y"]) * yard()
 		var td := team_dir(team)
 		# Keep the next line of scrimmage between the goal lines.
 		var lo := own_goal_z(team) + td * margin
 		var hi := attack_goal_z(team) - td * margin
-		_next_los_z = clampf(spot_z, minf(lo, hi), maxf(lo, hi))
+		var spot := clampf(spot_z, minf(lo, hi), maxf(lo, hi))
+		_next_offense = team
+		_next_los_z = spot
 		if team != offense:
-			result = "%s. TURNOVER: the other team takes over on the %s" % [text, yard_line_text(_next_los_z, team)]
-		elif text == "Incomplete pass":
-			result = text
+			result = "%s. TURNOVER: %s takes over on the %s" % [text, NetSession.TEAM_NAMES[team], yard_line_text(spot, team)]
+			_next_down = 1
+			_next_gain_z = _first_gain(team, spot)
 		else:
-			result = "%s (%+d yards)" % [text, roundi(gained)]
+			var gained := (spot - los_z) * dir() / yard()
+			result = text if text == "Incomplete pass" else "%s (%+d yards)" % [text, roundi(gained)]
+			if not goal_to_go() and (spot - gain_z) * dir() >= 0.0:
+				result += ". FIRST DOWN! Four downs to score"
+				_next_down = 1
+				_next_gain_z = attack_goal_z(team)
+			elif down >= int(m["downs"]):
+				result += ". TURNOVER ON DOWNS"
+				_next_offense = 1 - team
+				_next_down = 1
+				_next_gain_z = _first_gain(1 - team, spot)
+			else:
+				_next_down = down + 1
+				_next_gain_z = gain_z
 	# A dead ball can't be picked up or played.
 	if s.ball_kind == NetSession.Ball.HELD:
 		var c: AthleteState = s.sv_players[s.ball_holder].state
@@ -368,7 +458,16 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 	s.ball_kind = NetSession.Ball.LOOSE
 	s.ball_holder = 0
 	s.ball_live = false
-	s.announce(result)
+	s.announce("%s   [Orange %d - %d Blue]" % [result, score[0], score[1]])
+
+
+## After a score: no kickoffs, the other team starts on its own 15.
+func _kickoff_to(team: int) -> void:
+	_next_offense = team
+	_next_los_z = _z_at_own_yard(team, float(_m()["start_yard"]))
+	_next_down = 1
+	_next_gain_z = _first_gain(team, _next_los_z)
+	_next_try = 0
 
 
 # ------------------------------------------------------------------ for the AI
@@ -395,6 +494,7 @@ func bot_context(id: int) -> Dictionary:
 		"slot": slots.get(team, []).find(id), "offense": team == offense,
 		"phase": phase, "phase_time": phase_time, "play_no": play_no,
 		"dir": team_dir(team), "los_z": los_z, "rush_left": rush_left, "qb_id": qb_id,
+		"try_points": try_points, "down": down,
 		"mates": mates, "opps": opps, "route": routes.get(id, ""),
 		"half_wid": half_wid(), "holding": me.wrap_of != 0,
 		"ball_kind": s.ball_kind, "ball_holder": s.ball_holder, "ball_live": s.ball_live,
@@ -417,4 +517,6 @@ func bot_context(id: int) -> Dictionary:
 ## What clients need to show the play: phase, offense, direction, line, rush timer.
 func view() -> Dictionary:
 	return {"phase": phase, "offense": offense, "dir": dir(), "los": los_z, "rush": rush_left,
-		"qb": qb_id, "play_no": play_no, "phase_time": phase_time}
+		"qb": qb_id, "play_no": play_no, "phase_time": phase_time, "down": down, "gain": gain_z,
+		"score0": score[0], "score1": score[1], "try": try_points, "down_text": down_text(),
+		"spot_text": yard_line_text(los_z, offense)}

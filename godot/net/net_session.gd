@@ -328,6 +328,8 @@ func _host_tick(dt: float) -> void:
 			_sv_counter(1, AthleteState.Status.TRUCK)
 		if inp.get("hurdle", false):
 			_sv_counter(1, AthleteState.Status.HURDLE)
+		if inp.get("try_pick", 0) > 0 and flow != null:
+			flow.pick_try(1, int(inp["try_pick"]))
 		var me: SvPlayer = sv_players[1]
 		me.last_seq += 1
 		me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
@@ -395,12 +397,12 @@ func _host_tick(dt: float) -> void:
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
-	var play_i := PackedInt32Array([-1, 0, 0, 0, 0])
-	var play_f := PackedFloat32Array([0.0, 0.0, 0.0])
+	var play_i := PackedInt32Array([-1, 0, 0, 0, 0, 0, 0, 0, 0])
+	var play_f := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 	if flow != null:
 		var v := flow.view()
-		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"]])
-		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"]])
+		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"], v["down"], v["score0"], v["score1"], v["try"]])
+		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"], v["gain"]])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
 		var tick := sv_tick
@@ -413,6 +415,8 @@ func _team_bot_tick(id: int, dt: float) -> void:
 	var bi: Dictionary = sv_bots[id].think(flow.bot_context(id), dt, Tuning.data)
 	bp.last_seq += 1
 	bp.queue.append([bp.last_seq, bi["move"], bi["sprint"]])
+	if bi.get("try_pick", 0) > 0:
+		flow.pick_try(id, int(bi["try_pick"]))
 	if bi.get("take", false):
 		_sv_take(id)
 	if bi.has("pass_to"):
@@ -457,6 +461,9 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_lateral", lat_yaw))
 	if inp.get("strip", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_strip"))
+	if inp.get("try_pick", 0) > 0:
+		var pick := int(inp["try_pick"])
+		_send(func(): if cl_connected: rpc_id(1, "rpc_try_pick", pick))
 	if inp.get("truck", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.TRUCK))
 	if inp.get("hurdle", false):
@@ -507,7 +514,8 @@ func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ba
 		players[ids[i]] = data.slice(i * SNAP_STRIDE, (i + 1) * SNAP_STRIDE)
 		team_view[ids[i]] = int(data[i * SNAP_STRIDE + 15])
 	play_view = {} if play_i[0] < 0 else {"phase": play_i[0], "offense": play_i[1], "dir": play_i[2],
-		"qb": play_i[3], "play_no": play_i[4], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2]}
+		"qb": play_i[3], "play_no": play_i[4], "down": play_i[5], "score0": play_i[6], "score1": play_i[7],
+		"try": play_i[8], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2], "gain": play_f[3]}
 	latest_tick = tick
 	snap_buffer.append({"tick": tick, "players": players, "ball_i": ball_i, "ball_f": ball_f})
 	latest_holder = ball_i[1] if ball_i[0] == Ball.HELD else 0
@@ -560,6 +568,12 @@ func rpc_dive() -> void:
 func rpc_lateral(yaw: float) -> void:
 	if mode == Mode.HOST:
 		_sv_lateral(multiplayer.get_remote_sender_id(), yaw)
+
+
+@rpc("any_peer", "reliable")
+func rpc_try_pick(points: int) -> void:
+	if mode == Mode.HOST and flow != null:
+		flow.pick_try(multiplayer.get_remote_sender_id(), points)
 
 
 @rpc("any_peer", "reliable")

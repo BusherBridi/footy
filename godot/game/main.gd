@@ -32,6 +32,7 @@ var match_hud := Label.new()
 var _seen_play := -1
 var _event_time := 0.0
 var _take_latch := false
+var _try_pick := 0
 
 
 func _ready() -> void:
@@ -131,6 +132,8 @@ func _provide_input() -> Dictionary:
 	var aiming := Input.is_action_pressed("aim")
 	var take := _take_latch
 	_take_latch = false
+	var try_pick := _try_pick
+	_try_pick = 0
 	var tap := _throw_latch
 	_throw_latch = false
 	var tackle := _tackle_latch
@@ -156,6 +159,7 @@ func _provide_input() -> Dictionary:
 		"pitch": camera.pitch,
 		"throw_tap": tap and aiming,
 		"take": take,
+		"try_pick": try_pick,
 		"tackle": tackle,
 		"dive": dive,
 		"truck": truck,
@@ -198,12 +202,12 @@ func _build_ui() -> void:
 	event_label.add_theme_font_size_override("font_size", 22)
 	layer.add_child(event_label)
 	match_hud.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	match_hud.position = Vector2(-350, 8)
-	match_hud.custom_minimum_size = Vector2(700, 0)
+	match_hud.position = Vector2(-500, 8)
+	match_hud.custom_minimum_size = Vector2(1000, 0)
 	match_hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	match_hud.add_theme_font_size_override("font_size", 24)
 	layer.add_child(match_hud)
-	event_label.position.y = 96
+	event_label.position.y = 120
 	hud.position = Vector2(12, 8)
 	hud.add_theme_font_size_override("font_size", 18)
 	hud.visible = false
@@ -214,6 +218,9 @@ func _build_ui() -> void:
 	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	hint.position = Vector2(16, -36)
 	layer.add_child(hint)
+	for l in [match_hud, event_label, hint, hud]:
+		l.add_theme_constant_override("outline_size", 6)
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_build_menu(layer)
 
 
@@ -326,6 +333,10 @@ func _physics_process(_delta: float) -> void:
 		_throw_latch = true
 	if Input.is_action_just_pressed("lob_toggle"):
 		lob = not lob
+	if Input.is_action_just_pressed("try_one"):
+		_try_pick = 1
+	if Input.is_action_just_pressed("try_two"):
+		_try_pick = 2
 	if Input.is_action_just_pressed("take_ball"):
 		_take_latch = true
 	if Input.is_action_just_pressed("cycle_camera"):
@@ -390,12 +401,41 @@ func _update_match_view() -> void:
 	else:
 		role = "DEFENSE (you're the linebacker)"
 	var phase_text := ""
+	var my_try := int(v["try"]) > 0 and int(v["qb"]) == session.local_id
 	match int(v["phase"]):
 		PlayFlow.Phase.PRE_SNAP:
 			phase_text = "Press E to snap" if int(v["qb"]) == session.local_id else "Waiting for the snap"
+			if my_try:
+				phase_text += "  (1 / 2: pick the 1- or 2-point try)"
 		PlayFlow.Phase.LIVE:
 			var rush := float(v["rush"])
 			phase_text = ("Rush in %.1f" % rush) if rush > 0.0 else "LIVE"
 		PlayFlow.Phase.DEAD:
 			phase_text = "Play over"
-	match_hud.text = "%s  %s  |  %s" % [team_name, role, phase_text]
+	match_hud.text = "ORANGE %d  -  %d BLUE\n%s %s  |  ball on the %s\n%s %s  |  %s" % [
+		int(v["score0"]), int(v["score1"]), NetSession.TEAM_NAMES[int(v["offense"])].to_upper(),
+		_down_text(v), _spot_text(float(v["los"]), int(v["dir"])), team_name, role, phase_text]
+
+
+## "2nd & 7 to midfield", "3rd & goal", "2-point try": from the play numbers alone.
+func _down_text(v: Dictionary) -> String:
+	if int(v["try"]) > 0:
+		return "%d-point try" % int(v["try"])
+	var f := Tuning.section("field")
+	var yard: float = f["yard_m"]
+	var half := float(f["length_yards"]) * 0.5 * yard
+	var nth: String = ["", "1st", "2nd", "3rd", "4th"][clampi(int(v["down"]), 1, 4)]
+	if is_equal_approx(float(v["gain"]), float(v["dir"]) * half):
+		return "%s & goal" % nth
+	return "%s & %d to midfield" % [nth, maxi(1, roundi(absf(float(v["gain"]) - float(v["los"])) / yard))]
+
+
+func _spot_text(z: float, d: int) -> String:
+	var f := Tuning.section("field")
+	var yard: float = f["yard_m"]
+	var length := float(f["length_yards"])
+	var y := roundi((z + d * length * 0.5 * yard) * d / yard)
+	var mid := roundi(length * 0.5)
+	if y == mid:
+		return "midfield"
+	return "own %d" % y if y < mid else "opponent %d" % (2 * mid - y)

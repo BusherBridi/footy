@@ -6,6 +6,7 @@ extends Node3D
 var _los := MeshInstance3D.new()
 var _ring := MeshInstance3D.new()
 var _ring_mat := StandardMaterial3D.new()
+var _gain := MeshInstance3D.new()
 
 
 func _init() -> void:
@@ -18,6 +19,16 @@ func _init() -> void:
 	_los.mesh = line
 	_los.visible = false
 	add_child(_los)
+
+	var gl := BoxMesh.new()
+	gl.size = Vector3(1.0, 0.03, 0.35)
+	var gm := StandardMaterial3D.new()
+	gm.albedo_color = Color(1.0, 0.85, 0.1)
+	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gl.material = gm
+	_gain.mesh = gl
+	_gain.visible = false
+	add_child(_gain)
 
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.9
@@ -35,10 +46,16 @@ func update_view(view: Dictionary, width_m: float, rush_time: float, qb_pos: Var
 	if view.is_empty():
 		_los.visible = false
 		_ring.visible = false
+		_gain.visible = false
 		return
 	_los.visible = true
 	_los.position = Vector3(0.0, 0.06, float(view["los"]))
 	_los.scale = Vector3(width_m, 1.0, 1.0)
+	# Yellow line to gain (midfield until it's reached; hidden when it's the goal line).
+	var gain := float(view.get("gain", 0.0))
+	_gain.visible = int(view.get("try", 0)) == 0 and absf(gain) < 0.01
+	_gain.position = Vector3(0.0, 0.065, gain)
+	_gain.scale = Vector3(width_m, 1.0, 1.0)
 	var rush := float(view["rush"])
 	var live := int(view["phase"]) == PlayFlow.Phase.LIVE
 	_ring.visible = live and rush > 0.0 and qb_pos != null

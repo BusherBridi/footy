@@ -31,6 +31,8 @@ static func register() -> void:
 	_action("add_bot", [_key(KEY_B)])      # host only: dev test bot
 	_action("clear_bots", [_key(KEY_V)])
 	_action("reload_tuning", [_key(KEY_F5)])
+	_action("try_one", [_key(KEY_1), _button(JOY_BUTTON_DPAD_LEFT)])     # pick the 1-point try
+	_action("try_two", [_key(KEY_2), _button(JOY_BUTTON_DPAD_RIGHT)])    # pick the 2-point try
 	_action("fullscreen", [_key(KEY_F11)])
 	_action("debug_hud", [_key(KEY_F3)])
 

@@ -255,7 +255,12 @@
     "qb_back_y": 5.0,
     "defense_depth_y": 6.0,
     "mlb_depth_y": 5.0,
-    "spot_margin_y": 1.0
+    "spot_margin_y": 1.0,
+    "downs": 4,
+    "td_points": 6,
+    "safety_points": 2,
+    "try1_yard": 3,
+    "try2_yard": 10
   },
   "ai": {
     "snap_delay_min": 1.0,
@@ -288,6 +293,7 @@
       "post"
     ],
     "cover_react_s": 0.25,
-    "cover_sprint_gap_m": 3.0
+    "cover_sprint_gap_m": 3.0,
+    "two_point_chance": 0.35
   }
 }

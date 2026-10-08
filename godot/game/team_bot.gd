@@ -25,6 +25,7 @@ var _strip_roll := -1
 var _lateral_roll := -1
 var _cover_target := Vector2.ZERO
 var _cover_timer := 0.0
+var _try_decided := false
 
 
 func _init() -> void:
@@ -40,8 +41,14 @@ func think(ctx: Dictionary, dt: float, t: Dictionary) -> Dictionary:
 	_cover_timer -= dt
 	var phase := int(ctx["phase"])
 	if phase == PlayFlow.Phase.PRE_SNAP:
-		if ctx["offense"] and ctx["id"] == ctx["qb_id"] and float(ctx["phase_time"]) >= _snap_delay:
-			out["take"] = true
+		if ctx["offense"] and ctx["id"] == ctx["qb_id"]:
+			if int(ctx["try_points"]) == 1 and not _try_decided:
+				_try_decided = true
+				if rng.randf() < float(t["ai"]["two_point_chance"]):
+					out["try_pick"] = 2          # go for two
+					return out
+			if float(ctx["phase_time"]) >= _snap_delay:
+				out["take"] = true
 		return out
 	if phase != PlayFlow.Phase.LIVE:
 		return out
@@ -78,6 +85,8 @@ func _new_play(ctx: Dictionary, t: Dictionary) -> void:
 	_strip_roll = -1
 	_lateral_roll = -1
 	_cover_timer = 0.0
+	if int(ctx.get("try_points", 0)) == 0:
+		_try_decided = false
 	_wp.clear()
 	_wp_i = 0
 	var route: String = ctx["route"]

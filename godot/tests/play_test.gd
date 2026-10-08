@@ -53,7 +53,91 @@ func _ready():
 	print("%-50s %s" % ["defense recovers and is tackled (turnover)", _turnover()])
 	print("%-50s %s" % ["touchdown", _touchdown()])
 	print("%-50s %s" % ["only the thrower's team can catch", _catch_rule()])
+	print()
+	print("%-50s %s" % ["downs and scoring", "result"])
+	_reset_drive(0, 15)
+	print("%-50s %s" % ["start of a drive", _state()])
+	print("%-50s %s" % ["gain 6 yards", _tackle_at(21)])
+	print("%-50s %s" % ["gain 10 more: past midfield = first down", _tackle_at(31)])
+	print("%-50s %s" % ["incomplete", _incomplete_now()])
+	print("%-50s %s" % ["incomplete", _incomplete_now()])
+	print("%-50s %s" % ["incomplete", _incomplete_now()])
+	print("%-50s %s" % ["4th down incomplete: turnover on downs", _incomplete_now()])
+	_reset_drive(0, 40)
+	print("%-50s %s" % ["Orange touchdown", _td_now()])
+	print("%-50s %s" % ["the QB picks the 2-point try", _pick(2)])
+	print("%-50s %s" % ["2-point try scores", _td_now()])
+	_reset_drive(1, 50)
+	print("%-50s %s" % ["Blue touchdown", _td_now()])
+	print("%-50s %s" % ["1-point try is stopped", _tackle_at(57)])
+	_reset_drive(0, 3)
+	print("%-50s %s" % ["Orange tackled in its own end zone", _tackle_at(-1)])
 	get_tree().quit()
+
+
+func _state() -> String:
+	var f := s.flow
+	return "%s ball, %s, on the %s, score Orange %d - %d Blue" % [NetSession.TEAM_NAMES[f.offense], f.down_text(),
+		f.yard_line_text(f.los_z, f.offense), f.score[0], f.score[1]]
+
+
+func _reset_drive(team: int, yard_line: float) -> void:
+	var f := s.flow
+	f.offense = team
+	f.try_points = 0
+	f.los_z = f._z_at_own_yard(team, yard_line)
+	f.down = 1
+	f.gain_z = f._first_gain(team, f.los_z)
+	f._setup_play()
+
+
+func _run_to_next_play() -> String:
+	var f := s.flow
+	var result := ""
+	for i in 200:
+		s.sv_tick += 1
+		s._ball_tick(1.0 / 30.0)
+		f.tick(1.0 / 30.0)
+		if f.phase == PlayFlow.Phase.DEAD and result == "":
+			result = f.result
+		if f.phase == PlayFlow.Phase.PRE_SNAP:
+			break
+	return "%s  =>  %s" % [result, _state()]
+
+
+## The carrier is tackled at this yard line (measured from the offense's own goal).
+func _tackle_at(yard_line: float) -> String:
+	_snap_now()
+	var f := s.flow
+	s._set_ball_down(Vector2(0, f._z_at_own_yard(f.offense, yard_line)))
+	return _run_to_next_play()
+
+
+func _incomplete_now() -> String:
+	_snap_now()
+	s.dead_reason = "incomplete"
+	s.ball_kind = NetSession.Ball.LOOSE
+	return _run_to_next_play()
+
+
+func _td_now() -> String:
+	_snap_now()
+	var f := s.flow
+	s.sv_players[f.qb_id].state.pos = Vector2(0, f.attack_goal_z(f.offense) + f.dir() * 1.0)
+	return _run_to_next_play()
+
+
+func _pick(points: int) -> String:
+	var f := s.flow
+	f.phase_time = 1.0
+	f.pick_try(f.qb_id, points)
+	return _state()
+
+
+func _snap_now() -> void:
+	var f := s.flow
+	f.phase_time = 1.0
+	s._sv_take(f.qb_id)
 
 
 func _phase() -> String:
