@@ -184,6 +184,10 @@ func _throw_to(out: Dictionary, ctx: Dictionary, r: Dictionary, t: Dictionary) -
 		var speed: float = th["lob_speed"] if lob else th["bullet_speed"]
 		var T := maxf(dist / speed, float(th["min_flight_time"]))
 		target = Vector2(r["pos"]) + Vector2(r["vel"]) * T
+	# Never lead a receiver out of bounds or past the end line: they'd be running out of the field.
+	var room := float(ai["throw_inbounds_m"])
+	target.x = clampf(target.x, -float(ctx["half_wid"]) + room, float(ctx["half_wid"]) - room)
+	target.y = clampf(target.y, -float(ctx["half_len"]) + room, float(ctx["half_len"]) - room)
 	var err := float(ai["throw_error_m"])
 	target += Vector2(rng.randf_range(-err, err), rng.randf_range(-err, err))
 	out["pass_to"] = target
@@ -448,6 +452,13 @@ func _cover(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 	var to := _cover_target - Vector2(ctx["pos"])
 	out["move"] = to.normalized() if to.length() > 0.4 else Vector2.ZERO
 	out["sprint"] = Vector2(ctx["pos"]).distance_to(man["pos"]) > float(ai["cover_sprint_gap_m"])
+	# Backpedal square to the play while the receiver is still in front; once they're level,
+	# let go (and pay the hip flip) to turn and run with them.
+	var deeper := (Vector2(ctx["pos"]) - Vector2(man["pos"])).dot(Vector2(0.0, od))
+	var square: bool = ctx["in_stance"] or Vector2(ctx["facing"]).dot(Vector2(0.0, -od)) > 0.5
+	if deeper > float(ai["cover_stance_cushion_m"]) and square:
+		out["stance"] = true
+		out["sprint"] = false
 
 
 ## Pursue and tackle the carrier; join a wrap with a tackle or a strip; dive at range.

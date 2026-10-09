@@ -159,7 +159,9 @@ func _resolve(key: String) -> String:
 	return found
 
 
-func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false) -> void:
+## heading here is the way the body faces (the locked stance direction when in stance).
+## stance: 0 = no stance, 1 = shuffling forward or sideways, -1 = backpedalling.
+func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false, stance := 0) -> void:
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
 	if show:
@@ -171,7 +173,7 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		yaw += Time.get_ticks_msec() / 60.0     # a visible spin
 	if _anim != null:
 		var art := Tuning.section("art")
-		_animate(speed, status, fx)
+		_animate(speed, status, fx, stance)
 		rotation = Vector3(0.0, yaw, 0.12 if juke else 0.0)
 		# Neither pack has a head-first dive: tip the reaching "push" pose forward instead.
 		var diving := status == AthleteState.Status.DIVING
@@ -202,7 +204,7 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		position.y = 0.9
 
 
-func _animate(speed: float, status: int, fx: int) -> void:
+func _animate(speed: float, status: int, fx: int, stance := 0) -> void:
 	var art := Tuning.section("art")
 	if fx >= 1 and _last_fx == 0:
 		play_oneshot("swat" if fx == 4 else "stiff_arm")
@@ -222,7 +224,14 @@ func _animate(speed: float, status: int, fx: int) -> void:
 	if _oneshot_left > 0.0 and (key == "" or key == "pop"):
 		return
 	var scale := 1.0
-	if key == "":
+	if key == "" and stance != 0:
+		# Low and square: the crouch walk, run backwards when backpedalling.
+		if speed < 0.25:
+			key = "set"
+		else:
+			key = "stance"
+			scale = clampf(speed / float(art["stance_speed"]), float(art["min_anim_scale"]), float(art["max_anim_scale"])) * float(stance)
+	elif key == "":
 		var native := 1.0
 		if speed < 0.25:
 			key = "idle"

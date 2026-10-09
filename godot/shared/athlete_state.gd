@@ -16,7 +16,9 @@ var status := Status.OK          # set by the referee (tackles); movement just o
 var status_timer := 0.0
 var spin_side := 0                # -1 left, 0 straight, +1 right: where the spin will pop out
 var juke_timer := 0.0
-var carrying := false            # holding the ball: runs a little slower so pursuit angles work            # >0 while a juke is "live": dives pass through, close tackles hit harder
+var carrying := false            # holding the ball: runs a little slower so pursuit angles work
+var stance_dir := Vector2.ZERO   # stance: the locked facing (zero = not in stance)
+var hip_timer := 0.0             # >0 while flipping the hips out of a stance (slow, facing turning)
 
 
 func copy() -> AthleteState:
@@ -33,4 +35,15 @@ func copy() -> AthleteState:
 	s.juke_timer = juke_timer
 	s.spin_side = spin_side
 	s.carrying = carrying
+	s.stance_dir = stance_dir
+	s.hip_timer = hip_timer
 	return s
+
+
+## Where the body points: the locked stance direction, else the way you're moving.
+func facing() -> Vector2:
+	return stance_dir if stance_dir != Vector2.ZERO else heading
+
+
+func in_stance() -> bool:
+	return stance_dir != Vector2.ZERO and hip_timer <= 0.0

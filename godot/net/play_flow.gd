@@ -301,6 +301,7 @@ func _place(id: int, pos: Vector2, heading: Vector2) -> void:
 	p.queue.clear()
 	p.last_move = Vector2.ZERO
 	p.last_sprint = false
+	p.last_stance = false
 	p.reset_play_fields()
 
 
@@ -541,13 +542,14 @@ func bot_context(id: int) -> Dictionary:
 			opps.append(e)
 	var ctx := {
 		"id": id, "pos": me.state.pos, "heading": me.state.heading, "speed": me.state.speed,
+		"facing": me.state.facing(), "in_stance": me.state.in_stance(),
 		"stamina": me.state.stamina, "status": me.state.status, "team": team,
 		"slot": slots.get(team, []).find(id), "offense": team == offense,
 		"phase": phase, "phase_time": phase_time, "play_no": play_no,
 		"dir": team_dir(team), "los_z": los_z, "rush_left": rush_left, "qb_id": qb_id,
 		"try_points": try_points, "down": down,
 		"mates": mates, "opps": opps, "route": routes.get(id, ""),
-		"half_wid": half_wid(), "holding": me.wrap_of != 0,
+		"half_wid": half_wid(), "half_len": half_len() + endzone(), "holding": me.wrap_of != 0,
 		"ball_kind": s.ball_kind, "ball_holder": s.ball_holder, "ball_live": s.ball_live,
 		"ball_loose": Vector2(s.ball_loose.x, s.ball_loose.z), "thrower": s.ball_thrower,
 	}

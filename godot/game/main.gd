@@ -226,6 +226,7 @@ func _provide_input() -> Dictionary:
 	return {
 		"move": camera.world_move(stick),
 		"sprint": Input.is_action_pressed("sprint") or (Input.is_action_pressed("sprint_trigger") and not aiming),
+		"stance": Input.is_action_pressed("stance") and not session.local_has_ball(),
 		"aiming": aiming,
 		"throw": aiming and Input.is_action_pressed("throw"),
 		"yaw": camera.yaw,
@@ -603,6 +604,7 @@ func _fill_card() -> void:
 		["CONTROLS", "Keyboard & mouse", "Controller"],
 		["Move / look", "WASD / mouse", "Left stick / right stick"],
 		["Sprint (hold)", L.call("sprint", false), L.call("sprint_trigger", true)],
+		["Stance (hold: keep facing, shuffle / backpedal)", L.call("stance", false), L.call("stance", true)],
 		["WITH THE BALL"],
 		["Stiff arm, left side", L.call("stiff_left", false), L.call("stiff_left", true)],
 		["Stiff arm, right side", L.call("stiff_right", false), L.call("stiff_right", true)],

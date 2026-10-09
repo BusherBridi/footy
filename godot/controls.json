@@ -11,6 +11,7 @@
     "look_down":      {"keys": [], "pad": ["RightY+"]},
     "sprint":         {"keys": ["Shift"], "pad": []},
     "sprint_trigger": {"keys": [], "pad": ["RT"]},
+    "stance":         {"keys": ["Ctrl"],  "pad": ["LT"]},
 
     "stiff_left":     {"keys": ["MouseLeft"],  "pad": ["LB"]},
     "stiff_right":    {"keys": ["MouseRight"], "pad": ["RB"]},
