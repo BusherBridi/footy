@@ -55,7 +55,7 @@ $missing = @()
 $totalBytes = 0
 foreach ($id in $clips.Keys) {
     # Match the id as a whole number pair: "33_01" but not "133_01" or "33_011".
-    $pattern = "(^|[^0-9])" + [regex]::Escape($id) + "([^0-9]|$)"
+    $pattern = '(^|[^0-9])' + [regex]::Escape($id) + '([^0-9]|$)'
     $found = @($files | Where-Object { $_.BaseName -match $pattern })
     if ($found.Count -eq 0) {
         $missing += $id
