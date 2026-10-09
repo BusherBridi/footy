@@ -351,7 +351,7 @@ func _build_ui() -> void:
 		l.add_theme_constant_override("outline_size", 6)
 		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	add_child(look)
-	look.apply(str(settings.get_value("game", "look", Tuning.section("look").get("default", "baseline"))))
+	look.apply(str(settings.get_value("game", "look_choice", Tuning.section("look").get("default", "baseline"))))
 	_build_menu(layer)
 	_build_hud_bits(layer)
 	_build_pause(layer)
@@ -603,7 +603,7 @@ func _pause_row(label: String, control: Control) -> HBoxContainer:
 
 
 func _set_look(n: String) -> void:
-	_save_setting("game", "look", n)
+	_save_setting("game", "look_choice", n)
 	_look_pick.selected = look.names().find(n)
 	event_label.text = "Look: %s" % look.label(n)
 	_event_time = 2.0
