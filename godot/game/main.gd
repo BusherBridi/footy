@@ -36,6 +36,7 @@ var _take_latch := false
 var _try_pick := 0
 var _spin_latch := false
 var _swat_latch := false
+var _pump_latch := false
 var _block_held := false
 var _stiff_side := 0             # -1 / +1: a stiff arm on that side is waiting to be sent
 var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
@@ -51,6 +52,7 @@ var _pos_pick := OptionButton.new()
 var _diff_pick := OptionButton.new()
 var _throw_btn := Button.new()
 var _cam_btn := Button.new()
+var _acc_btn := Button.new()
 var _sens_slider := HSlider.new()
 var _sens_label := Label.new()
 var _pause_note := Label.new()
@@ -227,6 +229,8 @@ func _provide_input() -> Dictionary:
 	_spin_latch = false
 	var swat := _swat_latch
 	_swat_latch = false
+	var pump := _pump_latch
+	_pump_latch = false
 	var side := _stiff_side
 	_stiff_side = 0
 	var pop := _pop_side
@@ -252,6 +256,7 @@ func _provide_input() -> Dictionary:
 		"hurdle": hurdle,
 		"spin": spin,
 		"swat": swat,
+		"pump": pump,
 		"block": _block_held,
 		"side": side,
 		"spin_side": pop,
@@ -395,6 +400,7 @@ func _load_settings() -> void:
 	camera.sens_mult = float(settings.get_value("controls", "mouse_sensitivity", 1.0))
 	camera.qb_style = int(settings.get_value("controls", "qb_camera", 0)) % ChaseCamera.QB_PROFILES.size()
 	throw_mode = int(settings.get_value("controls", "throw_mode", NetSession.ThrowMode.AIM)) as NetSession.ThrowMode
+	Tuning.data["accuracy"]["enabled"] = bool(settings.get_value("game", "accuracy", Tuning.section("accuracy").get("enabled", true)))
 
 
 func _save_setting(section: String, key: String, value: Variant) -> void:
@@ -489,6 +495,14 @@ func _build_pause(layer: CanvasLayer) -> void:
 		_save_setting("controls", "qb_camera", camera.qb_style)
 		_refresh_pause())
 	box.add_child(_pause_row("QB camera", _cam_btn))
+	_acc_btn.pressed.connect(func():
+		var on := not bool(Tuning.section("accuracy").get("enabled", true))
+		Tuning.data["accuracy"]["enabled"] = on
+		_save_setting("game", "accuracy", on)
+		_refresh_pause())
+	var acc_row := _pause_row("Accuracy", _acc_btn)
+	_host_only.append(acc_row)
+	box.add_child(acc_row)
 	_sens_slider.min_value = 0.25
 	_sens_slider.max_value = 3.0
 	_sens_slider.step = 0.05
@@ -548,6 +562,7 @@ func _pause_row(label: String, control: Control) -> HBoxContainer:
 
 func _refresh_pause() -> void:
 	_throw_btn.text = "Angle + power" if throw_mode == NetSession.ThrowMode.AIM else "Hold for distance (old)"
+	_acc_btn.text = "Throws land in a circle (on)" if bool(Tuning.section("accuracy").get("enabled", true)) else "Perfect throws (off)"
 	_cam_btn.text = ["Over the shoulder", "High"][camera.qb_style] if camera.qb_style < 2 else ChaseCamera.QB_PROFILES[camera.qb_style]
 	var host := session.mode == NetSession.Mode.HOST
 	for c in _host_only:
@@ -622,10 +637,11 @@ func _fill_card() -> void:
 		["Spin (then a hand button = pop that side)", L.call("spin", false), L.call("spin", true)],
 		["Hurdle", L.call("hurdle", false), L.call("hurdle", true)],
 		["Lateral (where the camera points)", L.call("lateral", false), L.call("lateral", true)],
-		["QB (one forward pass, from behind the line)"],
+		["QB (one forward pass, from behind the line; the circle is how accurate it'll be)"],
 		["Snap", L.call("snap", false), L.call("snap", true)],
 		["Aim (look up / down = angle)", L.call("aim", false), L.call("aim", true)],
 		["Power: hold, release to throw", L.call("throw", false), L.call("throw", true)],
+		["Pump fake (while aiming)", L.call("spin", false), L.call("spin", true)],
 		["Cancel the throw", "let go of aim first", "let go of aim first"],
 		["DEFENSE"],
 		["Tackle (again: let go of a hold)", L.call("tackle", false), L.call("tackle", true)],
@@ -743,7 +759,11 @@ func _physics_process(_delta: float) -> void:
 	if Input.is_action_just_pressed("hurdle"):
 		_hurdle_latch = true
 	if Input.is_action_just_pressed("spin") and session.local_has_ball():
-		_spin_latch = true
+		# While aiming the same button pump fakes; otherwise it's the spin.
+		if session.local_can_pass() and Input.is_action_pressed("aim"):
+			_pump_latch = true
+		else:
+			_spin_latch = true
 	if Input.is_action_just_pressed("swat") and not session.local_has_ball():
 		_swat_latch = true
 	if Input.is_action_just_pressed("snap") and not session.local_has_ball():

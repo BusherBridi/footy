@@ -5,6 +5,7 @@ var s: NetSession
 
 
 func _ready():
+	Tuning.data["accuracy"]["enabled"] = false     # exact throws: these cases test catching, not aim
 	var root3d := Node3D.new()
 	add_child(root3d)
 	s = NetSession.new()

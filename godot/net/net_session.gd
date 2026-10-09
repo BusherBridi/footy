@@ -48,6 +48,7 @@ class SvPlayer:
 	var team := -1               # 0 or 1 in a match; -1 in the sandbox
 	var swat_from := -1.0        # server tick (fractional) the swat reach started; -1 = not reaching
 	var stiff_tick := -1000      # server tick of the last stiff arm press (timing readout)
+	var pump_cd := 0.0
 	var position := 0            # preferred spot: 0 = QB / linebacker, 1 = receiver / cornerback
 	var swat_cd := 0.0
 
@@ -118,6 +119,10 @@ var ball_lob := false
 var ball_lateral := false         # a pitch: if nobody catches it, it stays live like a fumble
 var ball_angle := -1.0           # launch angle (radians) for angle+power throws, -1 for the old model
 var ball_thrower := 0
+var pump_id := 0                 # pump fakes so far (bots react once to each)
+var pump_tick := -1000
+var pump_yaw := 0.0
+var pump_from := Vector2.ZERO
 var swat_note := ""              # "swatted by ..." for the incomplete-pass result, else empty
 var last_swat_why := ""          # timing details of the last swat or pick (debug log, tests)
 var ball_loose := Vector3(0, 0.3, 0)
@@ -132,6 +137,7 @@ var throw_charge := 0.0
 var throw_charging := false
 var aim_active := false
 var aim_pos := Vector2.ZERO
+var aim_spread := 0.0            # the accuracy circle at the aim point (metres)
 var aim_lob := false
 var aim_arc := PackedVector3Array()
 var aim_angle := -1.0
@@ -420,6 +426,8 @@ func _host_tick(dt: float) -> void:
 			_sv_counter(1, AthleteState.Status.SPIN)
 		if inp.get("swat", false):
 			_sv_swat(1, float(sv_tick) + _alpha())      # the tick the host was looking at
+		if inp.get("pump", false):
+			_sv_pump(1, inp.get("yaw", 0.0))
 		if inp.get("spin_side", 0) != 0:
 			_sv_spin_side(1, int(inp["spin_side"]))
 		if inp.get("lateral", false):
@@ -543,6 +551,8 @@ func _team_bot_tick(id: int, dt: float) -> void:
 		_sv_counter(id, AthleteState.Status.HURDLE)
 	if bi.get("swat", false):
 		_sv_swat(id, float(sv_tick))
+	if bi.get("pump", false):
+		_sv_pump(id, bi.get("yaw", 0.0))
 
 
 ## Bots throw with the charge-for-distance model: it lands exactly where they aim.
@@ -568,6 +578,9 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
 	if inp.get("spin", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.SPIN))
+	if inp.get("pump", false):
+		var pump_at: float = inp.get("yaw", 0.0)
+		_send(func(): if cl_connected: rpc_id(1, "rpc_pump", pump_at))
 	if inp.get("swat", false):
 		var seen := render_tick       # the ball we reacted to is drawn at this server tick
 		_send(func(): if cl_connected: rpc_id(1, "rpc_swat", seen))
@@ -1214,6 +1227,25 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 		if not flow.can_pass(id):
 			return        # one forward pass per play, from behind the line
 		flow.pass_thrown = true
+	var thr: SvPlayer = sv_players[id]
+	var p0v := Vector3(thr.state.pos.x, float(Tuning.section("throw")["release_height"]), thr.state.pos.y)
+	# Accuracy: the ball lands somewhere inside a circle around where it was aimed.
+	var aimed: Vector3 = BallFlight.launch(p0v, yaw, charge, lob, Tuning.data, angle)["land"]
+	var from := thr.state.pos
+	var aim2 := Vector2(aimed.x, aimed.z)
+	var dist := from.distance_to(aim2)
+	var sp := ThrowAccuracy.spread(thr.state, (aim2 - from).normalized(), dist, _opp_positions(id), Tuning.data)
+	var r: float = sp["radius"]
+	if r > 0.0 and dist > 1.0:
+		var off := Vector2.from_angle(randf() * TAU) * sqrt(randf()) * r
+		var target := aim2 + off
+		var rel := target - from
+		yaw = atan2(-rel.x, -rel.y)
+		charge = ThrowAccuracy.charge_for(p0v, yaw, lob, angle, rel.length(), Tuning.data)
+		var landed: Vector3 = BallFlight.launch(p0v, yaw, charge, lob, Tuning.data, angle)["land"]
+		var miss := aim2.distance_to(Vector2(landed.x, landed.z))
+		_coach(id, "Throw: lands within %.1f m of your aim (%s). This one: %.1f m off" % [r, sp["why"], miss])
+		_log_event("throw by %s: %.0f m, spread %.1f m (%s), %.1f m off" % [_name(id), dist, r, sp["why"], miss])
 	var pos: Vector2 = sv_players[id].state.pos
 	ball_p0 = Vector3(pos.x, float(Tuning.section("throw")["release_height"]), pos.y)
 	ball_yaw = yaw
@@ -1226,6 +1258,52 @@ func _sv_throw(id: int, charge: float, yaw: float, lob: bool, angle := -1.0) -> 
 	ball_thrower = id
 	ball_kind = Ball.FLIGHT
 	ball_holder = 0
+
+
+## Where the thrower's opponents are (everyone else in the sandbox), for the pressure term.
+func _opp_positions(id: int) -> Array:
+	var out: Array = []
+	for oid in sv_players:
+		if oid != id and (flow == null or flow.team_of(oid) != flow.team_of(id)):
+			out.append(sv_players[oid].state.pos)
+	return out
+
+
+## The same list as the local player sees it (interpolated athletes on a client).
+func _local_opp_positions() -> Array:
+	if mode == Mode.HOST:
+		return _opp_positions(1)
+	var out: Array = []
+	var mine := local_team()
+	for aid in athletes:
+		if aid != local_id and (mine < 0 or team_of_id(aid) != mine):
+			var a: Node3D = athletes[aid]
+			out.append(Vector2(a.position.x, a.position.z))
+	return out
+
+
+## Pump fake: the arm comes through, no ball. Bots may bite; people see the motion.
+func _sv_pump(id: int, yaw: float) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or not _live() or ball_kind != Ball.HELD or ball_holder != id or p.pump_cd > 0.0:
+		return
+	if flow != null and not flow.can_pass(id):
+		return
+	var th := Tuning.section("throw")
+	p.pump_cd = th["pump_cooldown"]
+	p.fx = 5
+	p.fx_timer = th["pump_fx_time"]
+	pump_id += 1
+	pump_tick = sv_tick
+	pump_yaw = yaw
+	pump_from = p.state.pos
+	_log_event("%s pump fakes" % _name(id))
+
+
+@rpc("any_peer", "reliable")
+func rpc_pump(yaw: float) -> void:
+	if mode == Mode.HOST:
+		_sv_pump(multiplayer.get_remote_sender_id(), yaw)
 
 
 ## A pitch: a short, flat toss that may only go backward or sideways (upfield is -z).
@@ -1640,6 +1718,7 @@ func _swat_timers(dt: float) -> void:
 	for id in sv_players:
 		var q: SvPlayer = sv_players[id]
 		q.swat_cd = maxf(0.0, q.swat_cd - dt)
+		q.pump_cd = maxf(0.0, q.pump_cd - dt)
 		if q.swat_from >= 0.0 and float(sv_tick) - q.swat_from > window:
 			_swat_whiff(id)
 
@@ -1790,6 +1869,8 @@ func _ball_input(inp: Dictionary, dt: float) -> void:
 		var p0 := Vector3(here.x, float(th["release_height"]), here.y)
 		var fl := BallFlight.launch(p0, yaw, throw_charge, lob, Tuning.data, angle)
 		aim_pos = Vector2(fl["land"].x, fl["land"].z)
+		var rel := aim_pos - here
+		aim_spread = ThrowAccuracy.spread(local_state(), rel.normalized(), rel.length(), _local_opp_positions(), Tuning.data)["radius"]
 		aim_arc = BallFlight.arc_points(p0, yaw, throw_charge, lob, Tuning.data, angle)
 		if power_mode:
 			aim_lob = rad_to_deg(angle) >= 30.0   # marker colour only
@@ -1900,7 +1981,7 @@ func _process(delta: float) -> void:
 	elif mode == Mode.CLIENT and cl_state != null:
 		_update_client_visuals(delta)
 	if ball_view:
-		ball_view.set_aim(aim_active, aim_pos, aim_lob, float(Tuning.section("throw")["marker_radius"]), aim_arc)
+		ball_view.set_aim(aim_active, aim_pos, aim_lob, maxf(float(Tuning.section("throw")["marker_radius"]), aim_spread), aim_arc)
 
 	if log_verbose and mode != Mode.NONE:
 		_log_timer += delta

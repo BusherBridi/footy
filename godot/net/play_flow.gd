@@ -622,6 +622,8 @@ func bot_context(id: int) -> Dictionary:
 		"id": id, "pos": me.state.pos, "heading": me.state.heading, "speed": me.state.speed,
 		"facing": me.state.facing(), "in_stance": me.state.in_stance(),
 		"blocking": me.block_of, "shed_since": _shed_since(me),
+		"pump_id": s.pump_id, "pump_age": float(s.sv_tick - s.pump_tick) * s._tick_dt(),
+		"pump_dir": Vector2(-sin(s.pump_yaw), -cos(s.pump_yaw)), "pump_from": s.pump_from,
 		"stamina": me.state.stamina, "status": me.state.status, "team": team,
 		"slot": slots.get(team, []).find(id), "offense": team == offense,
 		"phase": phase, "phase_time": phase_time, "play_no": play_no,

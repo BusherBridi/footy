@@ -32,6 +32,11 @@ var _swat_go := false
 var _swat_lead := 0.0
 var _reach_until := -1.0         # flight time until which we keep squared up to the ball
 var _shed_at := -1.0             # blocked: shed when the window clock reaches this
+var _pump_seen := 0              # the last pump fake this bot decided about
+var _bite_left := 0.0            # >0: fooled by a pump fake, breaking on it
+var _bite_to := Vector2.ZERO
+var _pumped := false
+var _pump_at := 0.0
 var _last_shed_since := 0.0
 
 
@@ -46,6 +51,7 @@ func think(ctx: Dictionary, dt: float, t: Dictionary) -> Dictionary:
 	_counter_wait = maxf(0.0, _counter_wait - dt)
 	_juke_left = maxf(0.0, _juke_left - dt)
 	_cover_timer -= dt
+	_bite_left = maxf(0.0, _bite_left - dt)
 	var phase := int(ctx["phase"])
 	if phase == PlayFlow.Phase.PRE_SNAP:
 		if ctx["offense"] and ctx["id"] == ctx["qb_id"]:
@@ -95,6 +101,9 @@ func _new_play(ctx: Dictionary, t: Dictionary) -> void:
 	_strip_roll = -1
 	_lateral_roll = -1
 	_cover_timer = 0.0
+	_bite_left = 0.0
+	_pumped = false
+	_pump_at = rng.randf_range(0.5, float(ai["qb_min_hold"])) if rng.randf() < float(ai["pump_chance"]) else -1.0
 	if int(ctx.get("try_points", 0)) == 0:
 		_try_decided = false
 	_wp.clear()
@@ -161,6 +170,13 @@ func _qb(out: Dictionary, ctx: Dictionary, dt: float, t: Dictionary) -> void:
 			best_score = score
 			best = m
 			best["sep"] = sep
+	if not _pumped and _pump_at >= 0.0 and _hold >= _pump_at and not ctx["mates"].is_empty():
+		# Sell a throw to someone (often not the one we'll throw to).
+		_pumped = true
+		var fake: Dictionary = ctx["mates"][rng.randi() % ctx["mates"].size()]
+		var rel: Vector2 = Vector2(fake["pos"]) - pos
+		out["pump"] = true
+		out["yaw"] = atan2(-rel.x, -rel.y)
 	var near := _nearest_opp(ctx)
 	var pressure: bool = not near.is_empty() and float(near["dist"]) < float(ai["pressure_m"])
 	if pressure and _hold >= 0.6:
@@ -508,6 +524,8 @@ func _defend(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 ## defender only re-reads his man every cover_react_s, so a sharp cut buys separation.
 func _cover(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 	var ai: Dictionary = t["ai"]
+	if _bitten(out, ctx, ai):
+		return
 	var slot := int(ctx["slot"])
 	var man := {}
 	for o in ctx["opps"]:
@@ -531,6 +549,23 @@ func _cover(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 	if deeper > float(ai["cover_stance_cushion_m"]) and square:
 		out["stance"] = true
 		out["sprint"] = false
+
+
+## A fresh pump fake aimed roughly our way: maybe bite and break on the fake throw line.
+func _bitten(out: Dictionary, ctx: Dictionary, ai: Dictionary) -> bool:
+	if int(ctx["pump_id"]) != _pump_seen and float(ctx["pump_age"]) < 0.2:
+		_pump_seen = int(ctx["pump_id"])
+		var from: Vector2 = ctx["pump_from"]
+		var dir: Vector2 = ctx["pump_dir"]
+		var rel: Vector2 = Vector2(ctx["pos"]) - from
+		if rad_to_deg(absf(dir.angle_to(rel))) <= float(ai["pump_bite_cone_deg"]) and rng.randf() < float(ai["pump_bite_chance"]):
+			_bite_left = float(ai["pump_bite_s"])
+			_bite_to = from + dir * maxf(2.0, rel.dot(dir) - 3.0)     # jump the route in front of us
+	if _bite_left <= 0.0:
+		return false
+	out["move"] = (_bite_to - Vector2(ctx["pos"])).normalized()
+	out["sprint"] = true
+	return true
 
 
 ## Pursue and tackle the carrier; join a wrap with a tackle or a strip; dive at range.
