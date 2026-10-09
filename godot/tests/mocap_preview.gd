@@ -36,13 +36,17 @@ func _ready() -> void:
 		var id := spec.get_slice(":", 0)
 		var f0 := t_from
 		var f1 := t_to
-		if spec.contains(":"):
-			f0 = float(spec.get_slice(":", 1).get_slice("-", 0))
-			f1 = float(spec.get_slice(":", 1).get_slice("-", 1))
+		var secs := spec.contains("@")       # "id@1.2-1.8": seconds instead of fractions
+		if spec.contains(":") or secs:
+			var r2 := spec.get_slice("@" if secs else ":", 1)
+			id = spec.get_slice("@", 0) if secs else id
+			f0 = float(r2.get_slice("-", 0))
+			f1 = float(r2.get_slice("-", 1))
 		var anim := MocapLib.clip(id)
 		if anim == null:
 			continue
 		var span := MocapLib.span(anim)
+		var to_t := func(u: float) -> float: return u if secs else lerpf(span.x, span.y, u)
 		var row_y := (clips.size() - 1 - r) * gap_y
 		for c in frames:
 			var m: Node3D = ual.instantiate()
@@ -53,7 +57,7 @@ func _ready() -> void:
 			var lib := AnimationLibrary.new()
 			lib.add_animation("clip", anim)
 			ap.add_animation_library("mocap", lib)
-			var t: float = lerpf(span.x, span.y, lerpf(f0, f1, c / maxf(1.0, frames - 1.0)))
+			var t: float = to_t.call(lerpf(f0, f1, c / maxf(1.0, frames - 1.0)))
 			ap.play("mocap/clip")
 			ap.seek(t, true)
 			ap.pause()

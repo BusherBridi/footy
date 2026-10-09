@@ -8,6 +8,9 @@ extends Node3D
 const TEAM_COLORS := [Color(0.95, 0.5, 0.15), Color(0.25, 0.45, 0.95)]
 
 static var _extra_lib: AnimationLibrary = null
+static var _mocap_lib: AnimationLibrary = null     # art.clips entries that are mocap segments
+static var _mocap_speed := {}
+static var _reload_hooked := false
 
 var _capsule := Node3D.new()
 var _body_mat := StandardMaterial3D.new()
@@ -24,6 +27,9 @@ var _clip := ""
 var _clip_cache := {}
 var _oneshot_left := 0.0
 var _last_fx := 0
+var _last_status := -1
+var _last_juke := false
+var _prev_facing := Vector2(0, -1)
 
 
 func _init() -> void:
@@ -95,6 +101,8 @@ func _load_model() -> void:
 			tmp.free()
 	if _anim != null and _extra_lib != null and not _anim.has_animation_library("extra"):
 		_anim.add_animation_library("extra", _extra_lib)
+	if _anim != null:
+		_attach_mocap()
 	# Tint only the main body material per athlete (the joints stay purple).
 	var mi: MeshInstance3D = _model.find_child("Mannequin", true, false)
 	if mi != null and mi.mesh != null:
@@ -136,9 +144,41 @@ func play_oneshot(key: String, seek := 0.0) -> void:
 	_anim.play(clip, 0.08)
 	if seek > 0.0:
 		_anim.seek(seek, true)
-	_anim.speed_scale = 1.0
+	_anim.speed_scale = _speed(key)
 	_clip = clip
-	_oneshot_left = (_anim.get_animation(clip).length - seek) * 0.9
+	_oneshot_left = (_anim.get_animation(clip).length - seek) / _anim.speed_scale * 0.9
+
+
+## Mocap segments named in art.clips (entries like {"mocap": "78_13", "from": .., "to": ..})
+## are cut once and shared by every athlete as the "mocap" library.
+static func _build_mocap(skel: Skeleton3D) -> void:
+	_mocap_lib = AnimationLibrary.new()
+	_mocap_speed.clear()
+	var clips: Dictionary = Tuning.section("art")["clips"]
+	for key in clips:
+		var spec = clips[key]
+		if spec is Dictionary and spec.has("mocap"):
+			var a := MocapLib.segment(spec, skel)
+			if a != null:
+				_mocap_lib.add_animation(key, a)
+				_mocap_speed[key] = MocapLib.speed_of(spec)
+
+
+func _attach_mocap() -> void:
+	if _mocap_lib == null:
+		var skels := _model.find_children("*", "Skeleton3D", true, false)
+		_build_mocap(skels[0] if not skels.is_empty() else null)
+	if not _reload_hooked:
+		_reload_hooked = true
+		Tuning.reloaded.connect(func(): _mocap_lib = null)
+	if _anim.has_animation_library("mocap"):
+		_anim.remove_animation_library("mocap")
+	_anim.add_animation_library("mocap", _mocap_lib)
+	_clip_cache.clear()
+
+
+func _speed(key: String) -> float:
+	return float(_mocap_speed.get(key, 1.0))
 
 
 ## Map a clip key from tuning (art.clips) to an animation the player has. Handles
@@ -149,7 +189,12 @@ func _resolve(key: String) -> String:
 	if _clip_cache.has(key):
 		return _clip_cache[key]
 	var clips: Dictionary = Tuning.section("art")["clips"]
-	var base: String = clips.get(key, key)
+	var spec = clips.get(key, key)
+	if spec is Dictionary:
+		var name := "mocap/" + key
+		_clip_cache[key] = name if _anim.has_animation(name) else ""
+		return _clip_cache[key]
+	var base: String = str(spec)
 	var found := ""
 	for name in [base, base + "_Loop", "extra/" + base, "extra/" + base + "_Loop"]:
 		if _anim.has_animation(name):
@@ -161,7 +206,8 @@ func _resolve(key: String) -> String:
 
 ## heading here is the way the body faces (the locked stance direction when in stance).
 ## stance: 0 = no stance, 1 = shuffling forward or sideways, -1 = backpedalling.
-func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false, stance := 0) -> void:
+## status_left: time left in the current status (lets "down" end with a get-up).
+func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx := 0, juke := false, stance := 0, status_left := -1.0) -> void:
 	var show: bool = Tuning.section("catch").get("show_ring", false)
 	_ring.visible = show
 	if show:
@@ -169,11 +215,22 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		_ring.scale = Vector3(r, 1, r)
 	position = Vector3(pos.x, 0.0, pos.y)
 	var yaw := atan2(-heading.x, -heading.y)
-	if status == AthleteState.Status.SPIN:
-		yaw += Time.get_ticks_msec() / 60.0     # a visible spin
+	var clip_spin := _anim != null and _resolve("spin") != ""
+	if status == AthleteState.Status.SPIN and not clip_spin:
+		yaw += Time.get_ticks_msec() / 60.0     # a visible spin (when there's no spin clip)
 	if _anim != null:
 		var art := Tuning.section("art")
-		_animate(speed, status, fx, stance)
+		# One-shots on the way into a move: the spin, and a juke toward the side of the cut.
+		if status == AthleteState.Status.SPIN and _last_status != AthleteState.Status.SPIN and clip_spin:
+			play_oneshot("spin")
+		if juke and not _last_juke:
+			var side := _prev_facing.cross(heading)
+			if absf(side) > 0.05:
+				play_oneshot("juke_right" if side > 0.0 else "juke_left")
+		_last_status = status
+		_last_juke = juke
+		_prev_facing = heading
+		_animate(speed, status, fx, stance, status_left)
 		rotation = Vector3(0.0, yaw, 0.12 if juke else 0.0)
 		# Neither pack has a head-first dive: tip the reaching "push" pose forward instead.
 		var diving := status == AthleteState.Status.DIVING
@@ -204,7 +261,7 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		position.y = 0.9
 
 
-func _animate(speed: float, status: int, fx: int, stance := 0) -> void:
+func _animate(speed: float, status: int, fx: int, stance := 0, status_left := -1.0) -> void:
 	var art := Tuning.section("art")
 	if fx >= 1 and _last_fx == 0:
 		if fx == 5:
@@ -215,7 +272,12 @@ func _animate(speed: float, status: int, fx: int, stance := 0) -> void:
 	var key := ""
 	match status:
 		AthleteState.Status.SET: key = "set"
-		AthleteState.Status.DOWN: key = "down"
+		AthleteState.Status.DOWN:
+			key = "down"
+			# The last stretch on the ground is the get-up, if there's a clip for it.
+			var getup = Tuning.section("art")["clips"].get("getup", null)
+			if getup is Dictionary and status_left >= 0.0 and status_left <= float(getup.get("fit", 0.6)):
+				key = "getup"
 		AthleteState.Status.DIVING: key = "dive"
 		AthleteState.Status.STUMBLE: key = "stumble"
 		AthleteState.Status.TRUCK: key = "truck"
@@ -228,7 +290,7 @@ func _animate(speed: float, status: int, fx: int, stance := 0) -> void:
 	# A one-shot (throw, stiff arm) keeps playing unless something bigger happens.
 	if _oneshot_left > 0.0 and (key == "" or key == "pop"):
 		return
-	var scale := 1.0
+	var scale := _speed(key) if key != "" else 1.0     # status clips: their own speed (mocap "fit")
 	if key == "" and stance != 0:
 		# Low and square: the crouch walk, run backwards when backpedalling.
 		if speed < 0.25:

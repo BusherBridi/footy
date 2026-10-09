@@ -2061,7 +2061,7 @@ func _update_host_visuals() -> void:
 		var p: SvPlayer = sv_players[id]
 		var ath := _ensure_athlete(id)
 		ath.set_team(p.team, id == local_id)
-		ath.set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.facing(), p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0, _stance_anim(p.state))
+		ath.set_visual(p.prev_pos.lerp(p.state.pos, a), p.state.facing(), p.state.speed, p.state.status, p.fx, p.state.juke_timer > 0.0, _stance_anim(p.state), p.state.status_timer)
 		_juke_dust(id, p.state.juke_timer > 0.0, p.state.pos)
 	_show_ball(ball_kind, ball_holder, ball_launch_tick, ball_p0, ball_yaw, ball_charge, ball_lob,
 		ball_loose, ball_angle, sv_tick + a)
@@ -2071,7 +2071,7 @@ func _update_client_visuals(delta: float) -> void:
 	correction *= exp(-float(_net()["correction_decay"]) * delta)
 	var me := _ensure_athlete(local_id)
 	me.set_team(cl_team, true)
-	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.facing(), cl_state.speed, cl_state.status, cl_fx, cl_state.juke_timer > 0.0, _stance_anim(cl_state))
+	me.set_visual(cl_prev_pos.lerp(cl_state.pos, _alpha()) + correction, cl_state.facing(), cl_state.speed, cl_state.status, cl_fx, cl_state.juke_timer > 0.0, _stance_anim(cl_state), cl_state.status_timer)
 
 	if latest_tick < 0:
 		return
@@ -2110,7 +2110,7 @@ func _update_client_visuals(delta: float) -> void:
 			spd = lerpf(a[4], spd, t)
 		var ath := _ensure_athlete(id)
 		ath.set_team(int(b[15]), false)
-		ath.set_visual(pos, heading, spd, st, fx, jk, _stance_anim(_state_from(b)))
+		ath.set_visual(pos, heading, spd, st, fx, jk, _stance_anim(_state_from(b)), b[11])
 		_juke_dust(id, jk, pos)
 
 	var bi: PackedInt32Array = s0["ball_i"]
@@ -2134,6 +2134,9 @@ func _show_ball(kind: int, holder: int, launch_tick: int, p0: Vector3, yaw: floa
 		pos = BallFlight.position_at(p0, fl, float(th["gravity"]), (tick_f - launch_tick) * _tick_dt())
 		landing_on = true
 		land = fl["land"]
+	# A catch: the new holder's hands come up as the ball arrives.
+	if kind == Ball.HELD and int(view_ball.get("kind", -1)) == Ball.FLIGHT and athletes.has(holder):
+		athletes[holder].play_oneshot("catch")
 	# The thrower's arm comes through as the ball leaves (a pass or a pitch).
 	if kind == Ball.FLIGHT and int(view_ball.get("kind", -1)) == Ball.HELD and athletes.has(int(view_ball.get("holder", 0))):
 		athletes[int(view_ball["holder"])].play_oneshot("throw", float(Tuning.section("art").get("throw_seek", 0.0)))
