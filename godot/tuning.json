@@ -229,7 +229,7 @@
   },
   "look": {
     "_readme": "Look lab: res_height = game pixels down the screen (0 = full resolution), levels = colour steps per channel (0 = unlimited), dither 0-1, then a colour grade. F7 cycles looks in game.",
-    "default": "due_process",
+    "default": "baseline",
     "looks": {
       "baseline":    {"label": "Baseline (lit, no filter)"},
       "due_process": {"label": "Due Process-style", "res_height": 360, "levels": 8, "dither": 0.55, "saturation": 0.85, "contrast": 1.12, "tint": [1.0, 0.97, 0.92]},
