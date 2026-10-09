@@ -543,6 +543,7 @@ func bot_context(id: int) -> Dictionary:
 	var ctx := {
 		"id": id, "pos": me.state.pos, "heading": me.state.heading, "speed": me.state.speed,
 		"facing": me.state.facing(), "in_stance": me.state.in_stance(),
+		"blocking": me.block_of, "shed_since": _shed_since(me),
 		"stamina": me.state.stamina, "status": me.state.status, "team": team,
 		"slot": slots.get(team, []).find(id), "offense": team == offense,
 		"phase": phase, "phase_time": phase_time, "play_no": play_no,
@@ -568,6 +569,12 @@ func bot_context(id: int) -> Dictionary:
 		ctx["flight"] = {"p0": s.ball_p0, "fl": fl, "g": float(Tuning.section("throw")["gravity"]),
 			"t": float(s.sv_tick - s.ball_launch_tick) / float(Tuning.section("net")["tick_hz"])}
 	return ctx
+
+
+func _shed_since(me: NetSession.SvPlayer) -> float:
+	if me.blocked_by == 0 or not s.sv_players.has(me.blocked_by):
+		return -1.0
+	return s.sv_players[me.blocked_by].block_age - me.shed_ref
 
 
 ## What clients need to show the play: phase, offense, direction, line, rush timer.

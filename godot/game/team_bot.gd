@@ -31,6 +31,8 @@ var _swat_throw := -1            # launch tick of the pass the swat decision bel
 var _swat_go := false
 var _swat_lead := 0.0
 var _reach_until := -1.0         # flight time until which we keep squared up to the ball
+var _shed_at := -1.0             # blocked: shed when the window clock reaches this
+var _last_shed_since := 0.0
 
 
 func _init() -> void:
@@ -58,6 +60,9 @@ func think(ctx: Dictionary, dt: float, t: Dictionary) -> Dictionary:
 	if phase != PlayFlow.Phase.LIVE:
 		return out
 
+	if int(ctx["status"]) == AthleteState.Status.BLOCKED:
+		_beat_block(out, ctx, t)
+		return out
 	var id: int = ctx["id"]
 	var kind: int = ctx["ball_kind"]
 	if kind == NetSession.Ball.HELD and int(ctx["ball_holder"]) == id:
@@ -306,12 +311,79 @@ func _support(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 	if qb_in_pocket:
 		_run_route(out, ctx)
 		return
+	if _block_for(out, ctx, t):
+		return
 	# Someone else is running with it: get out ahead of the carrier.
 	var d := float(ctx["dir"])
 	var slot := int(ctx["slot"])
 	var target := carrier + Vector2((slot % 2 * 2 - 1) * 4.0, d * 5.0)
 	out["move"] = (target - Vector2(ctx["pos"])).normalized()
 	out["sprint"] = true
+
+
+## Block for the carrier: take the free defender closest to them that I'm best placed to
+## reach (teammates nearer to a threat leave it to them), get in its path and hold.
+func _block_for(out: Dictionary, ctx: Dictionary, t: Dictionary) -> bool:
+	var ai: Dictionary = t["ai"]
+	var pos: Vector2 = ctx["pos"]
+	var carrier: Vector2 = ctx["carrier"]
+	if int(ctx["blocking"]) != 0:
+		# Locked on: drive them away from the carrier.
+		for o in ctx["opps"]:
+			if int(o["id"]) == int(ctx["blocking"]):
+				var away := (Vector2(o["pos"]) - carrier).normalized()
+				out["move"] = ((Vector2(o["pos"]) - pos).normalized() + away).normalized()
+		out["block"] = true
+		return true
+	var best := {}
+	var best_d := float(ai["block_range_m"])
+	for o in ctx["opps"]:
+		var st := int(o["status"])
+		if st != AthleteState.Status.OK and st != AthleteState.Status.POP:
+			continue
+		var d := Vector2(o["pos"]).distance_to(carrier)
+		if d >= best_d:
+			continue
+		var mine := true
+		var my_d := pos.distance_to(o["pos"])
+		for m in ctx["mates"]:
+			if int(m["id"]) != int(ctx["ball_holder"]) and Vector2(m["pos"]).distance_to(o["pos"]) < my_d - 0.5:
+				mine = false
+				break
+		if mine:
+			best = o
+			best_d = d
+	if best.is_empty():
+		return false
+	var threat: Vector2 = best["pos"]
+	# Square up in the threat's path to the carrier, then hit them.
+	var spot := threat + (carrier - threat).normalized() * 0.9
+	var to := spot - pos
+	out["move"] = to.normalized() if to.length() > 0.3 else (threat - pos).normalized()
+	out["sprint"] = to.length() > 3.0
+	if pos.distance_to(threat) <= float(t["block"]["reach"]) * 0.9:
+		out["move"] = (threat - pos).normalized()
+		out["block"] = true
+	return true
+
+
+## Blocked: time a shed (with an error), or sometimes spin out.
+func _beat_block(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
+	var ai: Dictionary = t["ai"]
+	var bk: Dictionary = t["block"]
+	var since := float(ctx["shed_since"])
+	if _shed_at < 0.0 or since < _last_shed_since - 0.01:
+		# A new block, or the window started over after a miss.
+		if rng.randf() < float(ai["spin_out_chance"]) and float(ctx["stamina"]) > float(bk["spin_out_cost"]) + 0.2:
+			out["swat"] = true          # spin out
+			_shed_at = -1.0
+			return
+		var mid := (float(bk["shed_from_s"]) + float(bk["shed_to_s"])) * 0.5
+		_shed_at = mid + rng.randfn(0.0, float(ai["shed_error_s"]))
+	_last_shed_since = since
+	if since >= _shed_at:
+		out["tackle"] = true
+		_shed_at = -1.0
 
 
 func _run_route(out: Dictionary, ctx: Dictionary) -> void:

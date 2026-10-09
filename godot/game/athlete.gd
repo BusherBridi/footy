@@ -220,6 +220,8 @@ func _animate(speed: float, status: int, fx: int, stance := 0) -> void:
 		AthleteState.Status.WRAPPED: key = "wrapped"
 		AthleteState.Status.HOLDING: key = "holding"
 		AthleteState.Status.POP: key = "pop"
+		AthleteState.Status.BLOCKING: key = "blocking"
+		AthleteState.Status.BLOCKED: key = "blocked"
 	# A one-shot (throw, stiff arm) keeps playing unless something bigger happens.
 	if _oneshot_left > 0.0 and (key == "" or key == "pop"):
 		return

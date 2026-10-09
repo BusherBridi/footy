@@ -18,12 +18,19 @@ enum Mode { NONE, HOST, CLIENT }
 class SvPlayer:
 	var state := AthleteState.new()
 	var prev_pos := Vector2.ZERO
-	var queue: Array = []        # entries: [seq, move, sprint, stance]
+	var queue: Array = []        # entries: [seq, move, sprint, stance, block]
 	var last_seq := 0            # highest seq received
 	var acked := 0               # last seq actually simulated
 	var last_move := Vector2.ZERO
 	var last_sprint := false
 	var last_stance := false
+	var last_block := false      # the block button is held (blockers)
+	var block_prev := false
+	var block_cd := 0.0
+	var block_of := 0            # blocker side: the defender I'm locked onto
+	var blocked_by := 0          # defender side: who has me blocked
+	var block_age := 0.0         # blocker side: how long the current block has held
+	var shed_ref := 0.0          # defender side: block_age the current shed window counts from
 	var tackle_cd := 0.0
 	var dive_cd := 0.0
 	var stiff_timer := 0.0       # >0: a stiff arm is active (the carrier's counter window)
@@ -60,6 +67,9 @@ class SvPlayer:
 		dodged = false
 		swat_from = -1.0
 		swat_cd = 0.0
+		block_of = 0
+		blocked_by = 0
+		block_cd = 0.0
 
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
@@ -424,7 +434,7 @@ func _host_tick(dt: float) -> void:
 			flow.pick_try(1, int(inp["try_pick"]))
 		var me: SvPlayer = sv_players[1]
 		me.last_seq += 1
-		me.queue.append([me.last_seq, inp["move"], inp["sprint"], inp.get("stance", false)])
+		me.queue.append([me.last_seq, inp["move"], inp["sprint"], inp.get("stance", false), inp.get("block", false)])
 
 	_swat_timers(dt)
 	for id in sv_players:
@@ -450,7 +460,7 @@ func _host_tick(dt: float) -> void:
 			ctx["carrier_vel"] = cs.heading * cs.speed
 		var bi: Dictionary = sv_bots[id].think(bp.state.pos, dt, Tuning.data, false, ctx)
 		bp.last_seq += 1
-		bp.queue.append([bp.last_seq, bi["move"], bi["sprint"], bi.get("stance", false)])
+		bp.queue.append([bp.last_seq, bi["move"], bi["sprint"], bi.get("stance", false), bi.get("block", false)])
 		if bi.get("tackle", false):
 			_sv_tackle(id)
 		if bi.get("dive", false):
@@ -470,10 +480,12 @@ func _host_tick(dt: float) -> void:
 			p.last_move = e[1]
 			p.last_sprint = e[2]
 			p.last_stance = e[3]
+			p.last_block = e[4]
 		# else: starved, repeat the last input
 		p.state.carrying = ball_kind == Ball.HELD and ball_holder == id
 		Movement.step(p.state, p.last_move, p.last_sprint, dt, Tuning.data, p.last_stance)
 
+	_block_tick(dt)
 	_wrap_tick()
 	_check_dives()
 	sv_tick += 1
@@ -509,7 +521,7 @@ func _team_bot_tick(id: int, dt: float) -> void:
 	var bp: SvPlayer = sv_players[id]
 	var bi: Dictionary = sv_bots[id].think(flow.bot_context(id), dt, _bot_tuning())
 	bp.last_seq += 1
-	bp.queue.append([bp.last_seq, bi["move"], bi["sprint"], bi.get("stance", false)])
+	bp.queue.append([bp.last_seq, bi["move"], bi["sprint"], bi.get("stance", false), bi.get("block", false)])
 	if bi.get("try_pick", 0) > 0:
 		flow.pick_try(id, int(bi["try_pick"]))
 	if bi.get("take", false):
@@ -578,18 +590,19 @@ func _client_tick(dt: float) -> void:
 	var move: Vector2 = inp["move"]
 	var sprint: bool = inp["sprint"]
 	var stance: bool = inp.get("stance", false)
+	var block: bool = inp.get("block", false)
 	cl_seq += 1
 	cl_prev_pos = cl_state.pos
 	cl_state.carrying = local_has_ball()
 	Movement.step(cl_state, move, sprint, dt, Tuning.data, stance)
-	cl_pending.append([cl_seq, move, sprint, stance])
+	cl_pending.append([cl_seq, move, sprint, stance, block])
 	cl_sent_time[cl_seq] = _now()
 
 	var n: int = mini(int(_net()["input_redundancy"]), cl_pending.size())
 	var batch := PackedFloat32Array()
 	for i in range(cl_pending.size() - n, cl_pending.size()):
 		var e: Array = cl_pending[i]
-		batch.append_array([e[0], e[1].x, e[1].y, (1.0 if e[2] else 0.0) + (2.0 if e[3] else 0.0)])     # flags: 1 sprint, 2 stance
+		batch.append_array([e[0], e[1].x, e[1].y, (1.0 if e[2] else 0.0) + (2.0 if e[3] else 0.0) + (4.0 if e[4] else 0.0)])     # flags: 1 sprint, 2 stance, 4 block
 	_send(func(): if cl_connected: rpc_id(1, "rpc_inputs", batch))
 
 
@@ -611,7 +624,7 @@ func rpc_inputs(batch: PackedFloat32Array) -> void:
 			move = move.normalized()
 		p.last_seq = seq
 		var flags := int(batch[i + 3])
-		p.queue.append([seq, move, (flags & 1) != 0, (flags & 2) != 0])
+		p.queue.append([seq, move, (flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0])
 
 
 @rpc("authority", "unreliable")
@@ -743,6 +756,9 @@ func rpc_fx(kind: String, pos: Vector3, strength: float) -> void:
 ## it at anyone else (or at nothing) is a committed whiff.
 func _sv_tackle(id: int, side := 0) -> void:
 	var p: SvPlayer = sv_players.get(id)
+	if p != null and p.state.status == AthleteState.Status.BLOCKED:
+		_sv_shed(id)          # same button: while blocked it's the shed
+		return
 	if p == null or p.state.status == AthleteState.Status.DOWN or p.tackle_cd > 0.0 or not _live():
 		return
 	if p.state.status == AthleteState.Status.DIVING:
@@ -1293,12 +1309,184 @@ func _ball_tick(dt: float) -> void:
 		_log_event("lateral hit the ground (live ball)" if ball_lateral else "incomplete: ball hit the ground")
 
 
+# ----------------------------------------------------------------------- blocking
+
+## Can this player block right now? Their team has the ball (held, or thrown by them),
+## they don't have it themselves, and the play is live. Not in the sandbox.
+func _may_block(id: int) -> bool:
+	if flow == null or not flow.is_live() or not sv_players.has(id):
+		return false
+	var team := flow.team_of(id)
+	if ball_kind == Ball.HELD:
+		return ball_holder != id and flow.team_of(ball_holder) == team
+	if ball_kind == Ball.FLIGHT:
+		return flow.team_of(ball_thrower) == team
+	return false
+
+
+## Press: shove the defender in front of you. A big win knocks them off balance; otherwise,
+## while the button stays held, you're locked on (a sustained block) for up to max_time.
+func _try_block(id: int) -> void:
+	var p: SvPlayer = sv_players[id]
+	var bk: Dictionary = Tuning.section("block")
+	var tk: Dictionary = Tuning.section("tackle")
+	if p.block_cd > 0.0 or p.state.status != AthleteState.Status.OK or not _may_block(id):
+		return
+	var f := p.state.facing()
+	var best := 0
+	var best_d := float(bk["reach"])
+	var from_behind := 0
+	for oid in sv_players:
+		var o: SvPlayer = sv_players[oid]
+		if flow.team_of(oid) == flow.team_of(id) or (ball_kind == Ball.HELD and oid == ball_holder):
+			continue
+		var st := o.state.status
+		if st != AthleteState.Status.OK and st != AthleteState.Status.POP and st != AthleteState.Status.STUMBLE:
+			continue
+		var to := o.state.pos - p.state.pos
+		var d := to.length()
+		if d > best_d or d < 0.01 or rad_to_deg(absf(f.angle_to(to))) > float(bk["arc_half_deg"]):
+			continue
+		if o.state.facing().dot(-to / d) <= float(bk["behind_cos"]):
+			from_behind = oid          # no blocks in the back
+			continue
+		best = oid
+		best_d = d
+	if best == 0:
+		if from_behind != 0:
+			_coach(id, "No blocks in the back: get in front of or beside %s" % _name(from_behind))
+		return
+	var o: SvPlayer = sv_players[best]
+	p.block_cd = bk["press_cooldown"]
+	p.state.stamina = maxf(0.0, p.state.stamina - float(bk["shove_cost"]))
+	var to_o := (o.state.pos - p.state.pos).normalized()
+	var closing := maxf(0.0, (p.state.heading * p.state.speed).dot(to_o))
+	var set_feet := p.state.in_stance()
+	var power := float(tk["weight"]) * (float(bk["power_base"]) + closing) * (float(bk["set_feet_mult"]) if set_feet else 1.0)
+	var front := o.state.facing().dot(-to_o)
+	var factor: float = tk["head_on_balance_factor"] if front >= float(tk["front_cos"]) else tk["side_balance_factor"]
+	var anchored := o.state.in_stance()
+	var balance := float(tk["weight"]) * (float(tk["balance_base"]) + o.state.speed * factor) + (float(bk["anchor_bonus"]) if anchored else 0.0)
+	o.state.speed *= float(bk["shove_speed_keep"])
+	var notes := "%s%s" % [" (set feet)" if set_feet else "", "" if not anchored else " (they were anchored in stance)"]
+	_fx("hit", (p.state.pos + o.state.pos) * 0.5, 0.35)
+	if power - balance >= float(bk["stumble_margin"]):
+		o.state.status = AthleteState.Status.STUMBLE
+		o.state.status_timer = bk["shove_stumble"]
+		o.state.stance_dir = Vector2.ZERO
+		_announce("PANCAKE: %s knocks %s off balance" % [_name(id), _name(best)])
+		_coach(id, "Pancake: power %.1f vs balance %.1f%s" % [power, balance, notes])
+		_coach(best, "Knocked off balance by a block: power %.1f vs your balance %.1f" % [power, balance])
+		return
+	p.block_of = best
+	p.block_age = 0.0
+	o.blocked_by = id
+	o.shed_ref = 0.0
+	p.state.status = AthleteState.Status.BLOCKING
+	p.state.status_timer = bk["max_time"]
+	p.state.heading = to_o
+	p.state.stance_dir = Vector2.ZERO
+	p.state.speed = minf(p.state.speed, float(Tuning.section("movement")["run_speed"]) * float(bk["drive_mult"]))
+	o.state.status = AthleteState.Status.BLOCKED
+	o.state.status_timer = bk["max_time"]
+	o.state.stance_dir = Vector2.ZERO
+	_log_event("%s blocks %s (power %.1f vs balance %.1f%s)" % [_name(id), _name(best), power, balance, notes])
+	_coach(id, "Block: power %.1f vs balance %.1f%s. Hold to keep them locked up (max %.1f s)" % [power, balance, notes, float(bk["max_time"])])
+	_coach(best, "Blocked by %s: shed %.2f-%.2f s after contact, or spin out" % [_name(id), float(bk["shed_from_s"]), float(bk["shed_to_s"])])
+
+
+## Each tick: start blocks on a fresh press, keep locked defenders in front of their
+## blocker, and end blocks that ran out (button let go, time, stamina, play over).
+func _block_tick(dt: float) -> void:
+	var bk: Dictionary = Tuning.section("block")
+	for id in sv_players.keys():
+		var p: SvPlayer = sv_players[id]
+		p.block_cd = maxf(0.0, p.block_cd - dt)
+		var pressed := p.last_block and not p.block_prev
+		p.block_prev = p.last_block
+		if p.block_of != 0:
+			var o: SvPlayer = sv_players.get(p.block_of)
+			if o == null or not p.last_block or p.state.status != AthleteState.Status.BLOCKING \
+					or o.state.status != AthleteState.Status.BLOCKED or not _may_block(id) \
+					or p.block_age >= float(bk["max_time"]) or p.state.stamina <= 0.0:
+				_end_block(id)
+				continue
+			p.block_age += dt
+			p.state.stamina = maxf(0.0, p.state.stamina - dt * float(bk["drain"]))
+			var f := p.state.heading       # a blocker always faces (and drives toward) the defender
+			o.state.pos = p.state.pos + f * float(bk["offset"])
+			o.state.heading = -f
+			o.state.speed = 0.0
+		elif pressed:
+			_try_block(id)
+
+
+func _end_block(blocker_id: int, stumble_blocker := false) -> void:
+	var p: SvPlayer = sv_players.get(blocker_id)
+	if p == null or p.block_of == 0:
+		return
+	var o: SvPlayer = sv_players.get(p.block_of)
+	if o != null:
+		o.blocked_by = 0
+		if o.state.status == AthleteState.Status.BLOCKED:
+			o.state.status = AthleteState.Status.OK
+			o.state.status_timer = 0.0
+	p.block_of = 0
+	if p.state.status == AthleteState.Status.BLOCKING:
+		p.state.status = AthleteState.Status.STUMBLE if stumble_blocker else AthleteState.Status.OK
+		p.state.status_timer = float(Tuning.section("block")["shed_blocker_stumble"]) if stumble_blocker else 0.0
+
+
+## A blocked defender times a shed: inside the window they're free and the blocker
+## stumbles; a miss restarts the window from now (you can't mash).
+func _sv_shed(id: int) -> void:
+	var o: SvPlayer = sv_players.get(id)
+	if o == null or o.blocked_by == 0 or not sv_players.has(o.blocked_by):
+		return
+	var bk: Dictionary = Tuning.section("block")
+	var b: SvPlayer = sv_players[o.blocked_by]
+	var since := b.block_age - o.shed_ref
+	var w0: float = bk["shed_from_s"]
+	var w1: float = bk["shed_to_s"]
+	if since >= w0 and since <= w1:
+		var bid := o.blocked_by
+		_end_block(bid, true)
+		_fx("hit", o.state.pos, 0.3)
+		_announce("%s sheds the block from %s" % [_name(id), _name(bid)])
+		_coach(id, "Shed! %.2f s after contact (window %.2f-%.2f s)" % [since, w0, w1])
+		_coach(bid, "They shed your block %.2f s in" % since)
+	else:
+		o.shed_ref = b.block_age
+		_coach(id, "Shed missed: %.2f s %s (window %.2f-%.2f s after contact). The window starts over" % [
+			absf(since - (w0 if since < w0 else w1)), "early" if since < w0 else "late", w0, w1])
+
+
+## Spin out of a block: always works, but costs a lot of stamina and a moment off balance.
+func _sv_spin_out(id: int) -> void:
+	var o: SvPlayer = sv_players.get(id)
+	if o == null or o.blocked_by == 0:
+		return
+	var bk: Dictionary = Tuning.section("block")
+	if o.state.stamina < float(bk["spin_out_cost"]):
+		_coach(id, "Too tired to spin out (needs %d%% stamina)" % int(float(bk["spin_out_cost"]) * 100.0))
+		return
+	o.state.stamina -= float(bk["spin_out_cost"])
+	var bid := o.blocked_by
+	_end_block(bid)
+	o.state.status = AthleteState.Status.STUMBLE
+	o.state.status_timer = bk["spin_out_stagger"]
+	_announce("%s spins out of the block from %s" % [_name(id), _name(bid)])
+
+
 # ------------------------------------------------------------------- swat and pick
 
 ## A defender's "play the ball" press. The reach is timed from the tick the player was
 ## looking at when they pressed (lag-fair, rewound at most max_rewind_ms).
 func _sv_swat(id: int, seen_tick: float) -> void:
 	var p: SvPlayer = sv_players.get(id)
+	if p != null and p.state.status == AthleteState.Status.BLOCKED:
+		_sv_spin_out(id)      # same button: while blocked it spins you out
+		return
 	if p == null or not _live() or p.swat_cd > 0.0 or p.swat_from >= 0.0:
 		return
 	if p.state.status != AthleteState.Status.OK and p.state.status != AthleteState.Status.POP:
@@ -1530,6 +1718,18 @@ func local_has_ball() -> bool:
 	if mode == Mode.HOST:
 		return ball_kind == Ball.HELD and ball_holder == 1
 	return mode == Mode.CLIENT and latest_holder == local_id and local_id != 0
+
+
+## The local player's team has the ball (or threw it) and they don't hold it: the hand
+## button blocks. Clients judge it from the snapshot, the server decides for real.
+func local_can_block() -> bool:
+	if mode == Mode.HOST:
+		return _may_block(1)
+	if play_view.is_empty() or int(play_view["phase"]) != PlayFlow.Phase.LIVE or local_has_ball():
+		return false
+	if latest_holder != 0:
+		return team_of_id(latest_holder) == local_team()
+	return int(view_ball.get("kind", -1)) == Ball.FLIGHT and int(play_view["offense"]) == local_team()
 
 
 ## Holding the ball with the forward pass still available (decides what the aim button does).

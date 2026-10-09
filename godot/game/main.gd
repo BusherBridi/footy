@@ -36,6 +36,7 @@ var _take_latch := false
 var _try_pick := 0
 var _spin_latch := false
 var _swat_latch := false
+var _block_held := false
 var _stiff_side := 0             # -1 / +1: a stiff arm on that side is waiting to be sent
 var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
 var _hand_first := 0             # chord detection: 1 = first hand button down, 2 = second, 0 = none
@@ -244,6 +245,7 @@ func _provide_input() -> Dictionary:
 		"hurdle": hurdle,
 		"spin": spin,
 		"swat": swat,
+		"block": _block_held,
 		"side": side,
 		"spin_side": pop,
 	}
@@ -622,6 +624,10 @@ func _fill_card() -> void:
 		["Strip (join a wrap)", L.call("strip", false), L.call("strip", true)],
 		["Dive", both.call("tackle", "strip", false), both.call("tackle", "strip", true)],
 		["Swat / intercept (press just before the ball arrives)", L.call("swat", false), L.call("swat", true)],
+		["Shed a block (timed) / spin out", "%s / %s" % [L.call("tackle", false), L.call("swat", false)], "%s / %s" % [L.call("tackle", true), L.call("swat", true)]],
+		["BLOCKING (your team has the ball)"],
+		["Block: tap to shove, hold to stay on", L.call("tackle", false), L.call("tackle", true)],
+		["Stronger from stance (set feet)", L.call("stance", false), L.call("stance", true)],
 		["OTHER"],
 		["Pick the 1 / 2-point try", "%s / %s" % [L.call("try_one", false), L.call("try_two", false)], "%s / %s" % [L.call("try_one", true), L.call("try_two", true)]],
 		["Camera style", L.call("cycle_camera", false), L.call("cycle_camera", true)],
@@ -656,6 +662,11 @@ func _unhandled_input(event: InputEvent) -> void:
 ## A QB who can still pass keeps them for aim and throw while aiming.
 func _hands(delta: float) -> void:
 	var carrier := session.local_has_ball()
+	# Your team has the ball and you don't: the main hand button blocks (hold to stay on).
+	_block_held = not carrier and session.local_can_block() and Input.is_action_pressed("tackle")
+	if not carrier and session.local_can_block():
+		_hand_first = 0
+		return
 	if carrier and session.local_can_pass() and Input.is_action_pressed("aim"):
 		_hand_first = 0
 		return
@@ -785,7 +796,7 @@ func _process(delta: float) -> void:
 	hud.position.y = 48
 	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nF1 controls card.  Sandbox host only: B add receiver bot, N add chaser bot, V remove bots, R take the ball" % [
 		role, session.athletes.size(), int(n["tick_hz"]), int(n["sim_latency_ms"]), int(n["sim_loss_pct"]),
-		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING", "SET"][int(s.status)],
+		s.speed, int(s.stamina * 100.0), "plant" if s.cut_timer > 0.0 else "-", ["ok", "STUMBLE", "DOWN", "DIVE", "SPIN", "TRUCK", "HURDLE", "POP", "WRAPPED", "HOLDING", "SET", "BLOCKED", "BLOCKING"][int(s.status)],
 		["loose", "held", "in flight"][int(session.view_ball.get("kind", 0))], "n/a (angle decides)" if throw_mode == NetSession.ThrowMode.AIM else ("LOB" if lob else "BULLET"),
 		"ANGLE+POWER (look = angle, hold = power)" if throw_mode == NetSession.ThrowMode.AIM else "HOLD (charge = distance)",
 		int(session.throw_charge * 100.0), camera.profile_name()]

@@ -180,12 +180,35 @@
   "difficulty": {
     "_readme": "Bot skill: values here replace the same keys in their section for the bots only.",
     "easy": {
-      "ai": {"cover_react_s": 0.45, "swat_chance": 0.3, "swat_error_s": 0.14, "throw_error_m": 2.0, "counter_wait": 1.2}
+      "ai": {"cover_react_s": 0.45, "swat_chance": 0.3, "swat_error_s": 0.14, "throw_error_m": 2.0, "counter_wait": 1.2, "shed_error_s": 0.2}
     },
     "normal": {},
     "hard": {
-      "ai": {"cover_react_s": 0.12, "swat_chance": 0.85, "swat_error_s": 0.04, "throw_error_m": 0.5, "counter_wait": 0.5}
+      "ai": {"cover_react_s": 0.12, "swat_chance": 0.85, "swat_error_s": 0.04, "throw_error_m": 0.5, "counter_wait": 0.5, "shed_error_s": 0.06}
     }
+  },
+  "block": {
+    "reach": 1.4,
+    "arc_half_deg": 70.0,
+    "behind_cos": -0.35,
+    "power_base": 3.0,
+    "set_feet_mult": 1.3,
+    "anchor_bonus": 4.5,
+    "stumble_margin": 4.0,
+    "shove_stumble": 0.4,
+    "shove_speed_keep": 0.4,
+    "shove_cost": 0.05,
+    "press_cooldown": 0.5,
+    "max_time": 1.5,
+    "drain": 0.15,
+    "drive_mult": 0.35,
+    "turn_deg": 120.0,
+    "offset": 0.9,
+    "shed_from_s": 0.25,
+    "shed_to_s": 0.6,
+    "shed_blocker_stumble": 0.35,
+    "spin_out_cost": 0.2,
+    "spin_out_stagger": 0.25
   },
   "swat": {
     "window_s": 0.35,
@@ -334,6 +357,9 @@
     "swat_lead_s": 0.12,
     "swat_error_s": 0.08,
     "swat_turn_s": 0.25,
+    "block_range_m": 10.0,
+    "shed_error_s": 0.12,
+    "spin_out_chance": 0.25,
     "swat_look_ahead_s": 0.6
   },
   "fx": {
@@ -381,7 +407,9 @@
       "stiff_arm": "Punch_Jab",
       "catch": "Spell_Simple_Shoot",
       "swat": "Jump",
-      "stance": "Crouch_Fwd"
+      "stance": "Crouch_Fwd",
+      "blocking": "Push",
+      "blocked": "Idle_Shield"
     },
     "dive_tilt_deg": 75.0,
     "dive_lift": 0.45,

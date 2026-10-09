@@ -38,6 +38,7 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	var popping := s.status == AthleteState.Status.POP
 	var wrapped := s.status == AthleteState.Status.WRAPPED
 	var holding := s.status == AthleteState.Status.HOLDING
+	var blocked := s.status == AthleteState.Status.BLOCKED     # placed by the referee each tick
 	if spinning and mag >= float(m["spin_side_input"]):
 		# Hold left or right of your running direction to choose the pop side.
 		var side := s.heading.cross(want)
@@ -71,6 +72,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 		top *= m["truck_speed_mult"]
 	elif wrapped:
 		top *= m["wrap_speed_mult"]
+	elif s.status == AthleteState.Status.BLOCKING:
+		top *= float(tuning["block"]["drive_mult"])      # driving a defender: slow going
 
 	# Cut: a hard stick flick makes a brief plant that keeps part of your speed.
 	if m["cut_enabled"] and s.status == AthleteState.Status.OK and not in_stance and not flipping and s.cut_timer <= 0.0 and s.cut_cooldown <= 0.0 \
@@ -93,8 +96,10 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if s.cut_timer > 0.0:
 		# Planted: no turning or acceleration for the plant duration.
 		s.cut_timer = maxf(0.0, s.cut_timer - dt)
-	elif diving or spinning or popping or holding:
+	elif diving or spinning or popping or holding or blocked:
 		pass   # committed: heading and speed are locked until the move ends
+	elif s.status == AthleteState.Status.BLOCKING:
+		_drive(s, want, mag, top, dt, m, tuning["block"])
 	else:
 		_steer_and_accelerate(s, want, mag, top, dt, m, m["down_stop_time"] if down else m["stop_time"])
 
@@ -102,6 +107,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	if wrapped:
 		# Dragging a defender around burns stamina fast; at zero the carrier goes down.
 		s.stamina = maxf(0.0, s.stamina - dt * float(m["wrap_drain"]))
+	elif s.status == AthleteState.Status.BLOCKING:
+		pass           # holding a block: no recovery (the referee drains it)
 	elif sprinting:
 		s.stamina = maxf(0.0, s.stamina - dt / float(m["sprint_seconds"]))
 	else:
@@ -143,6 +150,20 @@ static func _stance(s: AthleteState, held: bool, dt: float, m: Dictionary) -> bo
 		s.hip_timer = 0.0
 		s.stance_dir = Vector2.ZERO
 	return false
+
+
+## Locked onto a defender: you only push forward (into them), steering slowly.
+static func _drive(s: AthleteState, want: Vector2, mag: float, top: float, dt: float, m: Dictionary, bk: Dictionary) -> void:
+	var target := 0.0
+	if want != Vector2.ZERO:
+		var max_turn := deg_to_rad(float(bk["turn_deg"])) * dt
+		s.heading = s.heading.rotated(clampf(s.heading.angle_to(want), -max_turn, max_turn))
+		target = top * mag * maxf(0.0, s.heading.dot(want))
+	var run_speed: float = m["run_speed"]
+	if s.speed < target:
+		s.speed = minf(target, s.speed + (run_speed / m["accel_time"]) * dt)
+	else:
+		s.speed = maxf(target, s.speed - (run_speed / m["stop_time"]) * dt)
 
 
 static func _steer_and_accelerate(s: AthleteState, want: Vector2, mag: float, top: float, dt: float, m: Dictionary, stop_time: float) -> void:
