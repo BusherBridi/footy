@@ -41,6 +41,24 @@ var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
 var _hand_first := 0             # chord detection: 1 = first hand button down, 2 = second, 0 = none
 var _hand_timer := 0.0
 var card := PanelContainer.new()
+var pause_menu := Control.new()
+var stamina_bar := ColorRect.new()
+var stamina_back := ColorRect.new()
+var coach_label := Label.new()
+var _coach_time := 0.0
+var _pos_pick := OptionButton.new()
+var _diff_pick := OptionButton.new()
+var _throw_btn := Button.new()
+var _cam_btn := Button.new()
+var _sens_slider := HSlider.new()
+var _sens_label := Label.new()
+var _pause_note := Label.new()
+var _resume_btn: Button
+var _host_only: Array[Control] = []
+var settings := ConfigFile.new()
+const SETTINGS_PATH := "user://settings.cfg"
+## Set before reloading the scene: "match" restarts a match, "title" goes to the title screen.
+static var _relaunch := ""
 var _card_grid := GridContainer.new()
 var _pad_mode := false           # the last input came from a controller (labels show pad buttons)
 
@@ -48,18 +66,23 @@ var _pad_mode := false           # the last input came from a controller (labels
 func _ready() -> void:
 	InputSetup.register()
 	_parse_args()
+	_load_settings()
 	_build_world()
 	_build_ui()
 
 	session.athlete_parent = self
 	session.input_provider = _provide_input
-	session.local_ready.connect(func(a: Athlete): camera.target = a)
+	session.local_ready.connect(func(a: Athlete):
+		camera.target = a
+		session.set_position(int(settings.get_value("game", "position", 0))))
+	session.coach_text.connect(func(t: String):
+		coach_label.text = t
+		_coach_time = 6.0)
 	session.disconnected.connect(_on_disconnected)
 	session.fx_event.connect(_on_fx)
 	session.event_text.connect(func(t: String):
 		event_label.text = t
 		_event_time = 2.5)
-	session.log_enabled = args.has("log")
 	if args.has("log"):
 		print("Footy started with args: ", OS.get_cmdline_user_args(), "  log file: ", ProjectSettings.globalize_path("user://footy_log.txt"))
 	session.name = "NetSession"
@@ -81,6 +104,14 @@ func _ready() -> void:
 		Tuning.data["net"]["sim_loss_pct"] = float(args["loss"])
 
 	session.autopilot = args.has("autoplay")
+	session.log_verbose = args.has("log")
+	session.set_bot_difficulty(str(settings.get_value("game", "difficulty", "normal")))
+	if _relaunch != "":
+		var go := _relaunch
+		_relaunch = ""
+		if go == "match":
+			_host_match()
+		return
 	if args.has("match"):
 		_host_match()
 	elif args.has("host"):
@@ -159,6 +190,8 @@ func _on_disconnected() -> void:
 
 
 func _provide_input() -> Dictionary:
+	if pause_menu.visible and not brain:
+		return {"move": Vector2.ZERO, "sprint": false}
 	if brain:
 		var dt := 1.0 / float(Tuning.section("net")["tick_hz"])
 		return brain.think(session.local_state().pos, dt, Tuning.data, session.local_has_ball())
@@ -259,7 +292,7 @@ func _build_ui() -> void:
 	hud.add_theme_font_size_override("font_size", 18)
 	hud.visible = false
 	layer.add_child(hud)
-	hint.text = "F1 / Start: controls   F3: debug   F11: fullscreen   Esc: free the mouse"
+	hint.text = "Esc / Start: menu   F1: controls   F6: redo play   F9: mark a moment   F3: debug   F11: fullscreen"
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.modulate = Color(1, 1, 1, 0.7)
 	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -269,6 +302,8 @@ func _build_ui() -> void:
 		l.add_theme_constant_override("outline_size", 6)
 		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_build_menu(layer)
+	_build_hud_bits(layer)
+	_build_pause(layer)
 	_build_card(layer)
 
 
@@ -342,6 +377,195 @@ func _spacer(h: float) -> Control:
 	return c
 
 
+# ------------------------------------------------------------- settings and pause menu
+
+func _load_settings() -> void:
+	settings.load(SETTINGS_PATH)       # missing file = defaults
+	camera.sens_mult = float(settings.get_value("controls", "mouse_sensitivity", 1.0))
+	camera.qb_style = int(settings.get_value("controls", "qb_camera", 0)) % ChaseCamera.QB_PROFILES.size()
+	throw_mode = int(settings.get_value("controls", "throw_mode", NetSession.ThrowMode.AIM)) as NetSession.ThrowMode
+
+
+func _save_setting(section: String, key: String, value: Variant) -> void:
+	settings.set_value(section, key, value)
+	settings.save(SETTINGS_PATH)
+
+
+## Stamina bar (bottom centre) and the private timing readout above it.
+func _build_hud_bits(layer: CanvasLayer) -> void:
+	stamina_back.color = Color(0, 0, 0, 0.55)
+	stamina_back.size = Vector2(320, 14)
+	stamina_back.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	stamina_back.position = Vector2(-160, -42)
+	stamina_back.visible = false
+	layer.add_child(stamina_back)
+	stamina_bar.position = Vector2(2, 2)
+	stamina_bar.size = Vector2(316, 10)
+	stamina_back.add_child(stamina_bar)
+	coach_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	coach_label.position = Vector2(-600, -110)
+	coach_label.custom_minimum_size = Vector2(1200, 0)
+	coach_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	coach_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	coach_label.add_theme_font_size_override("font_size", 21)
+	coach_label.add_theme_color_override("font_color", Color(0.75, 0.95, 1.0))
+	coach_label.add_theme_constant_override("outline_size", 6)
+	coach_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	coach_label.visible = false
+	layer.add_child(coach_label)
+
+
+func _build_pause(layer: CanvasLayer) -> void:
+	pause_menu.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.visible = false
+	layer.add_child(pause_menu)
+	var dim := ColorRect.new()
+	dim.color = Color(0.02, 0.04, 0.08, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.add_child(center)
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.12, 0.18, 0.95)
+	style.set_corner_radius_all(16)
+	style.set_content_margin_all(32)
+	panel.add_theme_stylebox_override("panel", style)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "PAUSED"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 44)
+	title.add_theme_color_override("font_color", Color(1.0, 0.75, 0.3))
+	box.add_child(title)
+	_pause_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pause_note.add_theme_font_size_override("font_size", 17)
+	_pause_note.modulate = Color(1, 1, 1, 0.7)
+	box.add_child(_pause_note)
+	_resume_btn = _pause_button("Resume", func(): _set_paused(false))
+	box.add_child(_resume_btn)
+
+	_pos_pick.add_item("QB / linebacker")
+	_pos_pick.add_item("Receiver / cornerback")
+	_pos_pick.selected = int(settings.get_value("game", "position", 0))
+	_pos_pick.item_selected.connect(func(i: int):
+		_save_setting("game", "position", i)
+		session.set_position(i)
+		event_label.text = "Position changes from the next play"
+		_event_time = 2.0)
+	box.add_child(_pause_row("Position", _pos_pick))
+	for d in ["Easy", "Normal", "Hard"]:
+		_diff_pick.add_item(d)
+	_diff_pick.selected = ["easy", "normal", "hard"].find(str(settings.get_value("game", "difficulty", "normal")))
+	_diff_pick.item_selected.connect(func(i: int):
+		var level: String = ["easy", "normal", "hard"][i]
+		_save_setting("game", "difficulty", level)
+		session.set_bot_difficulty(level))
+	var diff_row := _pause_row("Bots", _diff_pick)
+	_host_only.append(diff_row)
+	box.add_child(diff_row)
+	_throw_btn.pressed.connect(func():
+		throw_mode = NetSession.ThrowMode.HOLD if throw_mode == NetSession.ThrowMode.AIM else NetSession.ThrowMode.AIM
+		_save_setting("controls", "throw_mode", throw_mode)
+		_refresh_pause())
+	box.add_child(_pause_row("Throw", _throw_btn))
+	_cam_btn.pressed.connect(func():
+		camera.cycle_style()
+		_save_setting("controls", "qb_camera", camera.qb_style)
+		_refresh_pause())
+	box.add_child(_pause_row("QB camera", _cam_btn))
+	_sens_slider.min_value = 0.25
+	_sens_slider.max_value = 3.0
+	_sens_slider.step = 0.05
+	_sens_slider.value = camera.sens_mult
+	_sens_slider.custom_minimum_size = Vector2(220, 32)
+	_sens_slider.value_changed.connect(func(v: float):
+		camera.sens_mult = v
+		_save_setting("controls", "mouse_sensitivity", v)
+		_sens_label.text = "%.2fx" % v)
+	_sens_label.text = "%.2fx" % camera.sens_mult
+	_sens_label.custom_minimum_size = Vector2(70, 0)
+	var sens_box := HBoxContainer.new()
+	sens_box.add_child(_sens_slider)
+	sens_box.add_child(_sens_label)
+	box.add_child(_pause_row("Mouse", sens_box))
+
+	var redo := _pause_button("Redo this play  (F6)", func():
+		session.redo_play()
+		_set_paused(false))
+	_host_only.append(redo)
+	box.add_child(redo)
+	var restart := _pause_button("Restart match", func(): _reload("match"))
+	_host_only.append(restart)
+	box.add_child(restart)
+	box.add_child(_pause_button("Controls  (F1)", func(): card.visible = not card.visible))
+	box.add_child(_pause_button("Mark this moment in the log  (F9)", func():
+		event_label.text = "Mark %d saved to the log" % session.add_mark()
+		_event_time = 2.0
+		_set_paused(false)))
+	box.add_child(_pause_button("Open the log folder", func():
+		OS.shell_open(ProjectSettings.globalize_path("user://"))))
+	box.add_child(_pause_button("Back to title", func(): _reload("title")))
+
+
+func _pause_button(text: String, action: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(440, 48)
+	b.add_theme_font_size_override("font_size", 22)
+	b.pressed.connect(action)
+	return b
+
+
+func _pause_row(label: String, control: Control) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	var l := Label.new()
+	l.text = label
+	l.custom_minimum_size = Vector2(140, 0)
+	l.add_theme_font_size_override("font_size", 22)
+	row.add_child(l)
+	control.custom_minimum_size.x = maxf(control.custom_minimum_size.x, 280)
+	control.add_theme_font_size_override("font_size", 20)
+	row.add_child(control)
+	return row
+
+
+func _refresh_pause() -> void:
+	_throw_btn.text = "Angle + power" if throw_mode == NetSession.ThrowMode.AIM else "Hold for distance (old)"
+	_cam_btn.text = ["Over the shoulder", "High"][camera.qb_style] if camera.qb_style < 2 else ChaseCamera.QB_PROFILES[camera.qb_style]
+	var host := session.mode == NetSession.Mode.HOST
+	for c in _host_only:
+		c.visible = host and session.flow != null
+	var solo := host and multiplayer.get_peers().is_empty()
+	_pause_note.text = "Game paused. Log: %s" % ProjectSettings.globalize_path(session.log_path()) if solo \
+		else "Online: the game keeps running. Log: %s" % ProjectSettings.globalize_path(session.log_path())
+
+
+func _set_paused(on: bool) -> void:
+	pause_menu.visible = on
+	if on:
+		_refresh_pause()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		_hand_first = 0
+		_resume_btn.grab_focus()
+	else:
+		card.visible = false
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	session.paused = on and session.mode == NetSession.Mode.HOST and multiplayer.get_peers().is_empty()
+
+
+## Restart the match or go back to the title: a clean reload of the whole scene.
+func _reload(go: String) -> void:
+	_relaunch = go
+	session.shutdown()
+	get_tree().reload_current_scene()
+
+
 func _input(event: InputEvent) -> void:
 	var pad := event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.5)
 	var kbm := event is InputEventKey or event is InputEventMouseButton
@@ -401,6 +625,9 @@ func _fill_card() -> void:
 		["Camera style", L.call("cycle_camera", false), L.call("cycle_camera", true)],
 		["Bullet / lob (old throw mode)", L.call("lob_toggle", false), L.call("lob_toggle", true)],
 		["Old throw mode / debug / reload / fullscreen", "F2 / F3 / F5 / F11", "-"],
+		["Menu (position, bots, settings)", L.call("pause", false), L.call("pause", true)],
+		["Redo this play", L.call("redo_play", false), L.call("redo_play", true)],
+		["Mark a moment in the log", L.call("mark", false), L.call("mark", true)],
 		["This card", L.call("controls_card", false), L.call("controls_card", true)],
 	]
 	for r in rows:
@@ -418,10 +645,8 @@ func _fill_card() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and not menu.visible:
+	if event is InputEventMouseButton and event.pressed and not menu.visible and not pause_menu.visible:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 ## The two hand buttons. With the ball: left / right stiff arm, both together truck, and
@@ -471,6 +696,15 @@ func _hands(delta: float) -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if Input.is_action_just_pressed("pause") and not menu.visible:
+		_set_paused(not pause_menu.visible)
+	if pause_menu.visible:
+		return
+	if Input.is_action_just_pressed("mark") and session.mode != NetSession.Mode.NONE:
+		event_label.text = "Mark %d saved to the log" % session.add_mark()
+		_event_time = 2.0
+	if Input.is_action_just_pressed("redo_play"):
+		session.redo_play()
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
 		InputSetup.register()
@@ -501,6 +735,7 @@ func _physics_process(_delta: float) -> void:
 		session.host_clear_bots()
 	if Input.is_action_just_pressed("throw_mode"):
 		throw_mode = NetSession.ThrowMode.HOLD if throw_mode == NetSession.ThrowMode.AIM else NetSession.ThrowMode.AIM
+		_save_setting("controls", "throw_mode", throw_mode)
 	if Input.is_action_just_pressed("throw"):
 		_throw_latch = true
 	if Input.is_action_just_pressed("lob_toggle"):
@@ -514,6 +749,9 @@ func _physics_process(_delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	_coach_time -= delta
+	coach_label.visible = _coach_time > 0.0 and not menu.visible
+	coach_label.modulate.a = clampf(_coach_time, 0.0, 1.0)
 	_event_time -= delta
 	event_label.visible = _event_time > 0.0
 	_update_match_view()
@@ -535,6 +773,12 @@ func _process(delta: float) -> void:
 		bot_tag = "[BOT %s%s]  " % ["route=" + brain.route_name if brain.route_name != "" else "wander", " + QB" if brain.is_qb else ""]
 	hud.visible = show_debug and not menu.visible
 	hint.visible = not menu.visible
+	var in_game := not menu.visible and session.mode != NetSession.Mode.NONE
+	stamina_back.visible = in_game
+	var st := clampf(session.local_state().stamina, 0.0, 1.0)
+	stamina_bar.size.x = (stamina_back.size.x - 4.0) * st
+	stamina_bar.color = Color(0.3, 0.85, 0.4).lerp(Color(1.0, 0.75, 0.2), clampf((0.6 - st) / 0.35, 0.0, 1.0)) \
+		if st > 0.25 else Color(0.95, 0.3, 0.25)
 	hud.add_theme_font_size_override("font_size", 16)
 	hud.position.y = 48
 	hud.text = bot_tag + "%s   players %d   tick %d Hz   fake lag %d ms / loss %d%%\nspeed %.1f m/s   stamina %d%%   cut %s   status %s\nball: %s   pass: %s   throw mode: %s   power %d%%   camera: %s\nF1 controls card.  Sandbox host only: B add receiver bot, N add chaser bot, V remove bots, R take the ball" % [

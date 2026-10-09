@@ -12,6 +12,7 @@ var target: Node3D
 var cam := Camera3D.new()
 var qb := false
 var qb_style := 0
+var sens_mult := 1.0            # player setting (pause menu), on top of the tuning value
 var aiming := false
 var _pivot := Vector3.ZERO
 var _dist := 7.0
@@ -72,8 +73,8 @@ func cycle_style() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var c := Tuning.section("camera")
-		yaw -= event.relative.x * c["mouse_sensitivity"]
-		pitch -= event.relative.y * c["mouse_sensitivity"]
+		yaw -= event.relative.x * c["mouse_sensitivity"] * sens_mult
+		pitch -= event.relative.y * c["mouse_sensitivity"] * sens_mult
 		_clamp_pitch(c)
 
 

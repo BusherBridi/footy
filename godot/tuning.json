@@ -171,6 +171,16 @@
     "tie_margin": 0.05,
     "show_ring": true
   },
+  "difficulty": {
+    "_readme": "Bot skill: values here replace the same keys in their section for the bots only.",
+    "easy": {
+      "ai": {"cover_react_s": 0.45, "swat_chance": 0.3, "swat_error_s": 0.14, "throw_error_m": 2.0, "counter_wait": 1.2}
+    },
+    "normal": {},
+    "hard": {
+      "ai": {"cover_react_s": 0.12, "swat_chance": 0.85, "swat_error_s": 0.04, "throw_error_m": 0.5, "counter_wait": 0.5}
+    }
+  },
   "swat": {
     "window_s": 0.35,
     "pick_from_s": 0.06,

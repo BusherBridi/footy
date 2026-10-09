@@ -32,6 +32,7 @@ var score := [0, 0]
 var try_points := 0           # 0 = normal play; 1 or 2 while running a try after a touchdown
 var pass_thrown := false      # the one forward pass of this play is used up
 var intercepted := false      # the defense picked off the pass this play
+var _play_start := {}         # down, spot and score as this play began (for redo)
 
 var _next_offense := 0
 var _next_los_z := 0.0
@@ -196,23 +197,34 @@ func on_leave(_id: int) -> void:
 	_refill_bots()
 
 
-## Humans take slot 0 (QB / linebacker) first, then bots in a stable order.
+## Humans who want slot 0 (QB / linebacker) take it first; humans who picked receiver /
+## cornerback go right after it; bots fill the rest in a stable order.
 func _order_team(team: int) -> Array:
 	var members := _members(team)
-	var humans: Array = []
+	var front: Array = []
+	var wide: Array = []
 	var bots: Array = []
 	for id in members:
-		if id > 0:
-			humans.append(id)
-		else:
+		if id < 0:
 			bots.append(id)
-	humans.sort()
+		elif s.sv_players[id].position == 1:
+			wide.append(id)
+		else:
+			front.append(id)
+	front.sort()
+	wide.sort()
 	bots.sort()
 	bots.reverse()        # -1, -2, -3 ...
-	return humans + bots
+	var order: Array = front + bots
+	var at := mini(1, order.size()) if front.is_empty() else front.size()
+	for i in wide.size():
+		order.insert(at + i, wide[i])
+	return order
 
 
 func _setup_play() -> void:
+	_play_start = {"offense": offense, "los_z": los_z, "down": down, "gain_z": gain_z,
+		"try": try_points, "score": score.duplicate()}
 	play_no += 1
 	pass_thrown = false
 	intercepted = false
@@ -321,6 +333,20 @@ func _snap() -> void:
 
 func is_live() -> bool:
 	return phase == Phase.LIVE
+
+
+## Run this play again from the same down, spot and score (playtesting aid).
+func redo_play() -> void:
+	if _play_start.is_empty():
+		return
+	offense = _play_start["offense"]
+	los_z = _play_start["los_z"]
+	down = _play_start["down"]
+	gain_z = _play_start["gain_z"]
+	try_points = _play_start["try"]
+	score = _play_start["score"].duplicate()
+	_setup_play()
+	s.announce("Redo: %s" % down_text())
 
 
 ## The defense caught the pass. On a try that ends it; otherwise the play goes on (the return).

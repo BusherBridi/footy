@@ -11,6 +11,7 @@ signal local_ready(athlete: Athlete)
 signal disconnected
 signal event_text(text: String)
 signal fx_event(kind: String, pos: Vector3, strength: float)   # hits, catches, fumbles: for camera shake and dust
+signal coach_text(text: String)   # private timing readout for the local player
 
 enum Mode { NONE, HOST, CLIENT }
 
@@ -38,6 +39,8 @@ class SvPlayer:
 	var fx_timer := 0.0
 	var team := -1               # 0 or 1 in a match; -1 in the sandbox
 	var swat_from := -1.0        # server tick (fractional) the swat reach started; -1 = not reaching
+	var stiff_tick := -1000      # server tick of the last stiff arm press (timing readout)
+	var position := 0            # preferred spot: 0 = QB / linebacker, 1 = receiver / cornerback
 	var swat_cd := 0.0
 
 	func reset_play_fields() -> void:
@@ -67,7 +70,13 @@ var local_id := 0
 var input_provider: Callable          # () -> [Vector2 world move, bool sprint]
 var athlete_parent: Node3D
 var athletes := {}                    # peer id -> Athlete (visual)
-var log_enabled := false
+var log_enabled := true          # events and marks; always on for playtest feedback
+var log_verbose := false         # --log: also a state line every second
+static var _log_file: FileAccess = null   # one log per launch, kept across Restart / Title
+static var _mark_no := 0
+var bot_difficulty := "normal"
+var paused := false              # solo host only: the pause menu stops the simulation
+var _bot_t: Dictionary = {}
 
 # Match (null in the sandbox)
 var flow: PlayFlow = null
@@ -166,6 +175,7 @@ func start_host(port: int) -> Error:
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	mode = Mode.HOST
+	Tuning.reloaded.connect(func(): _bot_t = {})
 	_make_ball_view()
 	local_id = 1
 	_add_sv_player(1)
@@ -196,6 +206,13 @@ func _make_ball_view() -> void:
 func _on_connected() -> void:
 	cl_connected = true
 	local_id = multiplayer.get_unique_id()
+
+
+## Close the connection (before leaving the scene).
+func shutdown() -> void:
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+	multiplayer.multiplayer_peer = null
 
 
 func _on_lost() -> void:
@@ -239,6 +256,65 @@ func remove_bot(id: int) -> void:
 
 func announce(text: String) -> void:
 	_announce(text)
+
+
+## A private line for one player: timing and numbers so they can learn the moves.
+func _coach(id: int, text: String) -> void:
+	if id <= 0:
+		return        # bots don't need coaching
+	_log_event("coach %s: %s" % [_name(id), text])
+	if id == local_id:
+		coach_text.emit(text)
+	elif id > 0 and multiplayer.get_peers().has(id):
+		_send(func(): if multiplayer.get_peers().has(id): rpc_id(id, "rpc_coach", text))
+
+
+@rpc("authority", "reliable")
+func rpc_coach(text: String) -> void:
+	coach_text.emit(text)
+
+
+## Where you line up (0 = QB / linebacker, 1 = receiver / cornerback). From the next play.
+func set_position(pref: int) -> void:
+	if mode == Mode.HOST:
+		_sv_set_position(1, pref)
+	elif cl_connected:
+		_send(func(): if cl_connected: rpc_id(1, "rpc_set_position", pref))
+
+
+@rpc("any_peer", "reliable")
+func rpc_set_position(pref: int) -> void:
+	if mode == Mode.HOST:
+		_sv_set_position(multiplayer.get_remote_sender_id(), pref)
+
+
+func _sv_set_position(id: int, pref: int) -> void:
+	if sv_players.has(id):
+		sv_players[id].position = clampi(pref, 0, 1)
+
+
+## Host only: put the current play back to how it started (same down, spot, score).
+func redo_play() -> void:
+	if mode == Mode.HOST and flow != null:
+		flow.redo_play()
+
+
+func set_bot_difficulty(level: String) -> void:
+	bot_difficulty = level
+	_bot_t = {}
+
+
+## The tuning the bots play with: the "difficulty" table in tuning.json laid over it.
+func _bot_tuning() -> Dictionary:
+	if _bot_t.is_empty():
+		_bot_t = Tuning.data.duplicate(true)
+		var over: Dictionary = Tuning.section("difficulty").get(bot_difficulty, {})
+		for sec in over:
+			var d: Dictionary = _bot_t.get(sec, {})
+			for k in over[sec]:
+				d[k] = over[sec][k]
+			_bot_t[sec] = d
+	return _bot_t
 
 
 func name_of(id: int) -> String:
@@ -301,7 +377,7 @@ func _add_sv_player(id: int) -> void:
 # ------------------------------------------------------------------- the tick
 
 func _physics_process(delta: float) -> void:
-	if mode == Mode.NONE or (mode == Mode.CLIENT and not cl_connected):
+	if mode == Mode.NONE or (mode == Mode.CLIENT and not cl_connected) or paused:
 		return
 	var dt := _tick_dt()
 	_acc += delta
@@ -428,7 +504,7 @@ func _host_tick(dt: float) -> void:
 ## A match bot: build its picture of the field, run its brain, apply its inputs.
 func _team_bot_tick(id: int, dt: float) -> void:
 	var bp: SvPlayer = sv_players[id]
-	var bi: Dictionary = sv_bots[id].think(flow.bot_context(id), dt, Tuning.data)
+	var bi: Dictionary = sv_bots[id].think(flow.bot_context(id), dt, _bot_tuning())
 	bp.last_seq += 1
 	bp.queue.append([bp.last_seq, bi["move"], bi["sprint"]])
 	if bi.get("try_pick", 0) > 0:
@@ -727,6 +803,7 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		# A juke is weak against a close tackle: the plant leaves you off balance.
 		balance -= float(tk["juke_close_penalty"])
 		counter_note += " - juke %.1f" % float(tk["juke_close_penalty"])
+	var stiff_read := _stiff_reading(cp, dive)
 	if not dive and cp.stiff_timer > 0.0:
 		# A well-timed stiff arm adds balance against a close tackle (not a dive), at full
 		# strength from the side, and weaker still with an empty stamina bar.
@@ -790,12 +867,14 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 		t.status_timer = tk["defender_stumble_time"]
 		_end_wrap(carrier_id, false)
 		_announce("BROKEN TACKLE (%s)" % detail)
+		_coach_tackle(tackler_id, carrier_id, "broken tackle", hit, balance, closing, can_takedown, stiff_read)
 		_fx("hit", c.pos, 0.6)
 		_after_dive(t, dive)
 		return
 	if diff < float(tk["clean_margin"]) or not can_takedown:
 		_start_wrap(tackler_id, carrier_id, hit)
 		_announce("WRAPPED UP (%s)" % detail)
+		_coach_tackle(tackler_id, carrier_id, "wrapped up", hit, balance, closing, can_takedown, stiff_read)
 		_fx("hit", c.pos, 0.4)
 		return
 
@@ -804,6 +883,7 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	c.status_timer = tk["down_time_big"] if big else tk["down_time"]
 	_end_wrap(carrier_id, false)
 	_announce(("BIG HIT" if big else "TACKLE") + " (%s)" % detail)
+	_coach_tackle(tackler_id, carrier_id, "big hit" if big else "tackled", hit, balance, closing, can_takedown, stiff_read)
 	_fx("bighit" if big else "hit", c.pos, 1.0 if big else 0.7)
 	if big:
 		fumble_chance = maxf(fumble_chance, float(tk["big_hit_fumble_chance"]))
@@ -813,6 +893,35 @@ func _resolve_tackle(tackler_id: int, carrier_id: int, dive := false) -> void:
 	else:
 		_set_ball_down(c.pos)
 	_after_dive(t, dive)
+
+
+## How the carrier's stiff arm lined up with this hit, for the timing readout.
+func _stiff_reading(cp: SvPlayer, dive: bool) -> String:
+	var tk: Dictionary = Tuning.section("tackle")
+	var window: float = tk["stiff_window"]
+	var since := float(sv_tick - cp.stiff_tick) * _tick_dt()
+	if dive:
+		return "stiff arm doesn't work against a dive" if since <= window else ""
+	if cp.stiff_timer > 0.0:
+		return "stiff arm landed %.2f s into its %.2f s window" % [window - cp.stiff_timer, window]
+	if since <= window + 0.6:
+		return "stiff arm ran out %.2f s before the hit (too early)" % (since - window)
+	return ""
+
+
+func _coach_tackle(tackler_id: int, carrier_id: int, outcome: String, hit: float, balance: float,
+		closing: float, can_takedown: bool, stiff_read: String) -> void:
+	var tk: Dictionary = Tuning.section("tackle")
+	var line := "%s: hit %.1f vs balance %.1f" % [_cap(outcome), hit, balance]
+	var t_line := line
+	if outcome == "wrapped up" and not can_takedown:
+		t_line += ". Too slow to take them down alone (closing %.1f m/s, need %.1f): get help or wear them down" % [closing, float(tk["takedown_speed"])]
+	_coach(tackler_id, t_line)
+	_coach(carrier_id, line + (". " + _cap(stiff_read) if stiff_read != "" else ""))
+
+
+static func _cap(t: String) -> String:
+	return t.substr(0, 1).to_upper() + t.substr(1)
 
 
 ## Stand-in for the end of the play: the ball is set down where the carrier ended up.
@@ -1043,6 +1152,7 @@ func _sv_stiffarm(id: int, side := 0) -> void:
 		return
 	p.counter_cd = tk["counter_cooldown"]
 	p.stiff_timer = tk["stiff_window"]
+	p.stiff_tick = sv_tick
 	p.stiff_side = side
 	p.stiff_weak = p.state.stamina < float(tk["stiff_cost"])
 	p.state.stamina = maxf(0.0, p.state.stamina - float(tk["stiff_cost"]))
@@ -1269,6 +1379,24 @@ func _swat_check(ts: float, bpos: Vector3, only_id := 0) -> bool:
 	var why := "pressed %.2f s before contact, %s, %s, %s" % [early, "facing" if facing else "not facing",
 		"in the hands" if in_hands else "fingertips", "beat the receiver" if beats else "receiver there too"]
 	last_swat_why = why
+	var sw_from: float = sw["pick_from_s"]
+	var sw_to: float = sw["pick_to_s"]
+	var c_line := "reached %.2f s before the ball (pick window %.2f-%.2f s)" % [early, sw_from, sw_to]
+	if timed and facing and in_hands and beats:
+		_coach(best, "PICK: " + c_line)
+	else:
+		var miss: Array[String] = []
+		if early < sw_from:
+			miss.append("%.2f s late" % (sw_from - early))
+		elif early > sw_to:
+			miss.append("%.2f s early" % (early - sw_to))
+		if not facing:
+			miss.append("back to the ball")
+		if not in_hands:
+			miss.append("only fingertips")
+		if not beats:
+			miss.append("receiver just as close")
+		_coach(best, "Swat, not a pick (%s): %s" % [", ".join(miss), c_line])
 	if timed and facing and in_hands and beats:
 		ball_kind = Ball.HELD
 		ball_holder = best
@@ -1329,6 +1457,7 @@ func _swat_whiff(id: int) -> void:
 		p.state.status = AthleteState.Status.STUMBLE
 		p.state.status_timer = Tuning.section("swat")["whiff_stumble"]
 	_log_event("%s swatted at air" % _name(id))
+	_coach(id, "Whiff: the ball didn't come within reach in the %.2f s window (too early, or too far)" % float(Tuning.section("swat")["window_s"]))
 
 
 ## An incomplete forward pass is dead; a dropped lateral is a live ball anyone can recover.
@@ -1551,7 +1680,7 @@ func _process(delta: float) -> void:
 	if ball_view:
 		ball_view.set_aim(aim_active, aim_pos, aim_lob, float(Tuning.section("throw")["marker_radius"]), aim_arc)
 
-	if log_enabled and mode != Mode.NONE:
+	if log_verbose and mode != Mode.NONE:
 		_log_timer += delta
 		if _log_timer >= 1.0:
 			_log_timer = 0.0
@@ -1565,12 +1694,35 @@ func _process(delta: float) -> void:
 				_log("    bot %d pos=(%.1f,%.1f) speed=%.1f" % [bid, bs.pos.x, bs.pos.y, bs.speed])
 
 
+## One log per launch (the previous one is kept as *_prev.txt). Clients get their own file
+## so a host and a client on one machine don't write over each other.
 func _log(line: String) -> void:
 	print(line)
-	var f := FileAccess.open("user://footy_log.txt", FileAccess.READ_WRITE if FileAccess.file_exists("user://footy_log.txt") else FileAccess.WRITE)
-	if f:
-		f.seek_end()
-		f.store_line(line)
+	if _log_file == null:
+		var path := log_path()
+		if FileAccess.file_exists(path):
+			DirAccess.rename_absolute(path, path.replace(".txt", "_prev.txt"))
+		_log_file = FileAccess.open(path, FileAccess.WRITE)
+		if _log_file == null:
+			return
+		_log_file.store_line("=== Footy log, %s ===" % Time.get_datetime_string_from_system(false, true))
+	_log_file.store_line("%s %s" % [Time.get_time_string_from_system(), line])
+	_log_file.flush()
+
+
+func log_path() -> String:
+	return "user://footy_log_client.txt" if mode == Mode.CLIENT else "user://footy_log.txt"
+
+
+## F9: a numbered marker in the log, so feedback can point at a moment ("mark 3 felt off").
+func add_mark() -> int:
+	_mark_no += 1
+	var st := local_state()
+	var v := get_play_view()
+	_log("########## MARK %d ##########  play %s, pos (%.1f, %.1f), speed %.1f, stamina %d%%, status %d, ball %s" % [
+		_mark_no, str(v.get("play_no", "-")), st.pos.x, st.pos.y, st.speed, int(st.stamina * 100.0), st.status,
+		["loose", "held", "flight"][int(view_ball.get("kind", 0))]])
+	return _mark_no
 
 
 ## Play state for the HUD and field markings (empty outside a match).
