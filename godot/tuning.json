@@ -227,6 +227,58 @@
     "min_m": 0.3,
     "max_m": 7.0
   },
+  "look": {
+    "_readme": "Look lab: res_height = game pixels down the screen (0 = full resolution), levels = colour steps per channel (0 = unlimited), dither 0-1, then a colour grade. F7 cycles looks in game.",
+    "default": "due_process",
+    "looks": {
+      "baseline":    {"label": "Baseline (lit, no filter)"},
+      "due_process": {"label": "Due Process-style", "res_height": 360, "levels": 8, "dither": 0.55, "saturation": 0.85, "contrast": 1.12, "tint": [1.0, 0.97, 0.92]},
+      "ps1":         {"label": "Chunky PS1", "res_height": 240, "levels": 6, "dither": 0.85, "saturation": 1.05, "contrast": 1.05},
+      "clean_pixel": {"label": "Clean pixel", "res_height": 480, "levels": 16, "dither": 0.0, "saturation": 1.05, "contrast": 1.05}
+    }
+  },
+  "lighting": {
+      "sky_top": [
+          0.25,
+          0.45,
+          0.82
+      ],
+      "sky_horizon": [
+          0.68,
+          0.76,
+          0.85
+      ],
+      "ground": [
+          0.09,
+          0.2,
+          0.1
+      ],
+      "sun_pitch_deg": -50.0,
+      "sun_yaw_deg": 30.0,
+      "sun_energy": 1.35,
+      "shadows": true,
+      "shadow_distance": 60.0,
+      "ambient_energy": 0.45,
+      "tonemap": "aces",
+      "exposure": 1.05,
+      "glow": false,
+      "ssao": true,
+      "fog_density": 0.002,
+      "grass_texture": true,
+      "grass_texels_per_m": 4.0,
+      "stripe_yards": 5,
+      "ambient_sky_mix": 0.35,
+      "ambient_color": [
+          0.75,
+          0.78,
+          0.72
+      ],
+      "surround": [
+          0.09,
+          0.2,
+          0.1
+      ]
+  },
   "swat": {
     "window_s": 0.35,
     "pick_from_s": 0.06,

@@ -35,6 +35,7 @@
     "controls_card":  {"keys": ["F1"], "pad": ["Back"]},
     "redo_play":      {"keys": ["F6"], "pad": ["DpadDown"]},
     "mark":           {"keys": ["F9"], "pad": []},
+    "cycle_look":     {"keys": ["F7"], "pad": []},
     "throw_mode":     {"keys": ["F2"], "pad": []},
     "debug_hud":      {"keys": ["F3"], "pad": []},
     "reload_tuning":  {"keys": ["F5"], "pad": []},

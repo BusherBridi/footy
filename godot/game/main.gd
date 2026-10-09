@@ -44,6 +44,10 @@ var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
 var _hand_first := 0             # chord detection: 1 = first hand button down, 2 = second, 0 = none
 var _hand_timer := 0.0
 var card := PanelContainer.new()
+var sun := DirectionalLight3D.new()
+var world_env := WorldEnvironment.new()
+var look := Look.new()
+var _look_pick := OptionButton.new()
 var pause_menu := Control.new()
 var stamina_bar := ColorRect.new()
 var stamina_back := ColorRect.new()
@@ -265,16 +269,11 @@ func _provide_input() -> Dictionary:
 
 
 func _build_world() -> void:
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, 30, 0)
 	add_child(sun)
-	var env := WorldEnvironment.new()
-	env.environment = Environment.new()
-	env.environment.background_mode = Environment.BG_COLOR
-	env.environment.background_color = Color(0.5, 0.7, 0.9)
-	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.6, 0.6, 0.6)
-	add_child(env)
+	world_env.environment = Environment.new()
+	add_child(world_env)
+	_apply_lighting()
+	Tuning.reloaded.connect(_apply_lighting)
 
 	add_child(field)
 	field.build(Tuning.section("field"))
@@ -284,6 +283,40 @@ func _build_world() -> void:
 	camera.cam.current = true
 	add_child(play_view)
 	add_child(fx)
+
+
+## Sky, sun and shadows, tonemapping, glow, ambient occlusion and haze ("lighting" in tuning).
+## Ambient occlusion and glow need the Forward+ renderer; the compatibility one skips them.
+func _apply_lighting() -> void:
+	var l := Tuning.section("lighting")
+	var col := func(k: String) -> Color:
+		var a: Array = l[k]
+		return Color(a[0], a[1], a[2])
+	sun.rotation_degrees = Vector3(float(l["sun_pitch_deg"]), float(l["sun_yaw_deg"]), 0)
+	sun.light_energy = float(l["sun_energy"])
+	sun.shadow_enabled = bool(l["shadows"])
+	sun.directional_shadow_max_distance = float(l["shadow_distance"])
+	var env := world_env.environment
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = col.call("sky_top")
+	sky_mat.sky_horizon_color = col.call("sky_horizon")
+	sky_mat.ground_horizon_color = col.call("sky_horizon")
+	sky_mat.ground_bottom_color = col.call("ground")
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	env.sky = sky
+	env.background_mode = Environment.BG_SKY
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = float(l["ambient_energy"])
+	env.ambient_light_sky_contribution = float(l.get("ambient_sky_mix", 1.0))
+	env.ambient_light_color = col.call("ambient_color") if l.has("ambient_color") else Color.WHITE
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES if str(l["tonemap"]) == "aces" else (Environment.TONE_MAPPER_FILMIC if str(l["tonemap"]) == "filmic" else Environment.TONE_MAPPER_LINEAR)
+	env.tonemap_exposure = float(l["exposure"])
+	env.glow_enabled = bool(l["glow"])
+	env.ssao_enabled = bool(l["ssao"])
+	env.fog_enabled = float(l["fog_density"]) > 0.0
+	env.fog_density = float(l["fog_density"])
+	env.fog_light_color = col.call("sky_horizon")
 
 
 func _build_ui() -> void:
@@ -317,6 +350,8 @@ func _build_ui() -> void:
 	for l in [match_hud, event_label, hint, hud]:
 		l.add_theme_constant_override("outline_size", 6)
 		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	add_child(look)
+	look.apply(str(settings.get_value("game", "look", Tuning.section("look").get("default", "baseline"))))
 	_build_menu(layer)
 	_build_hud_bits(layer)
 	_build_pause(layer)
@@ -519,6 +554,12 @@ func _build_pause(layer: CanvasLayer) -> void:
 	sens_box.add_child(_sens_slider)
 	sens_box.add_child(_sens_label)
 	box.add_child(_pause_row("Mouse", sens_box))
+	for n in look.names():
+		_look_pick.add_item(look.label(n))
+	_look_pick.item_selected.connect(func(i: int):
+		look.apply(look.names()[i])
+		_set_look(look.current))
+	box.add_child(_pause_row("Look (F7)", _look_pick))
 
 	var redo := _pause_button("Redo this play  (F6)", func():
 		session.redo_play()
@@ -561,7 +602,15 @@ func _pause_row(label: String, control: Control) -> HBoxContainer:
 	return row
 
 
+func _set_look(n: String) -> void:
+	_save_setting("game", "look", n)
+	_look_pick.selected = look.names().find(n)
+	event_label.text = "Look: %s" % look.label(n)
+	_event_time = 2.0
+
+
 func _refresh_pause() -> void:
+	_look_pick.selected = look.names().find(look.current)
 	_throw_btn.text = "Angle + power" if throw_mode == NetSession.ThrowMode.AIM else "Hold for distance (old)"
 	_acc_btn.text = "Throws land in a circle (on)" if bool(Tuning.section("accuracy").get("enabled", true)) else "Perfect throws (off)"
 	_cam_btn.text = ["Over the shoulder", "High"][camera.qb_style] if camera.qb_style < 2 else ChaseCamera.QB_PROFILES[camera.qb_style]
@@ -658,6 +707,7 @@ func _fill_card() -> void:
 		["Camera style", L.call("cycle_camera", false), L.call("cycle_camera", true)],
 		["Bullet / lob (old throw mode)", L.call("lob_toggle", false), L.call("lob_toggle", true)],
 		["Old throw mode / debug / reload / fullscreen", "F2 / F3 / F5 / F11", "-"],
+		["Cycle the look (look lab)", L.call("cycle_look", false), L.call("cycle_look", true)],
 		["Menu (position, bots, settings)", L.call("pause", false), L.call("pause", true)],
 		["Redo this play", L.call("redo_play", false), L.call("redo_play", true)],
 		["Mark a moment in the log", L.call("mark", false), L.call("mark", true)],
@@ -746,6 +796,8 @@ func _physics_process(_delta: float) -> void:
 		_event_time = 2.0
 	if Input.is_action_just_pressed("redo_play"):
 		session.redo_play()
+	if Input.is_action_just_pressed("cycle_look"):
+		_set_look(look.cycle())
 	if Input.is_action_just_pressed("reload_tuning"):
 		Tuning.reload()
 		InputSetup.register()
