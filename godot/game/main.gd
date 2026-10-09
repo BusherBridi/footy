@@ -37,6 +37,7 @@ var _try_pick := 0
 var _spin_latch := false
 var _swat_latch := false
 var _pump_latch := false
+var _spin_pending := 0.0         # just pressed spin: hand buttons pick the pop side even before the spin shows up
 var _block_held := false
 var _stiff_side := 0             # -1 / +1: a stiff arm on that side is waiting to be sent
 var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
@@ -691,14 +692,17 @@ func _hands(delta: float) -> void:
 	if not carrier and session.local_can_block():
 		_hand_first = 0
 		return
-	if carrier and session.local_can_pass() and Input.is_action_pressed("aim"):
-		_hand_first = 0
-		return
+	_spin_pending = maxf(0.0, _spin_pending - delta)
 	var a := Input.is_action_just_pressed("stiff_left" if carrier else "tackle")
 	var b := Input.is_action_just_pressed("stiff_right" if carrier else "strip")
-	if carrier and session.local_state().status == AthleteState.Status.SPIN:
+	# Spinning (or just pressed spin and the game hasn't caught up yet): a hand button picks
+	# the pop side. This comes first, even for a QB whose right click is otherwise aim.
+	if carrier and (session.local_state().status == AthleteState.Status.SPIN or _spin_pending > 0.0):
 		if a or b:
 			_pop_side = -1 if a else 1
+		_hand_first = 0
+		return
+	if carrier and session.local_can_pass() and Input.is_action_pressed("aim"):
 		_hand_first = 0
 		return
 	var window := float(Tuning.section("input").get("chord_window_s", 0.0))
@@ -764,6 +768,7 @@ func _physics_process(_delta: float) -> void:
 			_pump_latch = true
 		else:
 			_spin_latch = true
+			_spin_pending = float(Tuning.section("input").get("spin_pop_buffer_s", 0.3))
 	if Input.is_action_just_pressed("swat") and not session.local_has_ball():
 		_swat_latch = true
 	if Input.is_action_just_pressed("snap") and not session.local_has_ball():

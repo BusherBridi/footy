@@ -1,6 +1,7 @@
 {
   "input": {
-    "chord_window_s": 0.06
+    "chord_window_s": 0.06,
+    "spin_pop_buffer_s": 0.3
   },
   "field": {
     "yard_m": 0.9144,

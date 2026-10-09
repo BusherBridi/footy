@@ -34,6 +34,27 @@ func _ready():
 	print("%-52s %s" % ["mid-spin: right hand picks the pop side", await _run(["stiff_right"], [])])
 	m.session._host_tick(1.0 / 30.0)
 	print("%-52s %s" % ["  server spin side", m.session.sv_players[1].state.spin_side])
+	# Regression: right click during a spin pops right even if the stick says left.
+	var st: AthleteState = m.session.sv_players[1].state
+	st.status = AthleteState.Status.SPIN
+	st.status_timer = 0.3
+	st.heading = Vector2(0, -1)
+	st.spin_side = 0
+	m.session._sv_spin_side(1, 1)
+	for i in 12:
+		Movement.step(st, Vector2(-1, 0), false, 1.0 / 30.0, Tuning.data)     # stick held hard left
+	print("%-52s %s" % ["click right, then hold the stick left: pops", "heading (%.2f, %.2f) %s" % [st.heading.x, st.heading.y, "RIGHT" if st.heading.x > 0.3 else ("LEFT" if st.heading.x < -0.3 else "straight")]])
+	# Clicked just after pressing spin, before the spin showed up: still the pop side.
+	st.status = AthleteState.Status.OK
+	m._spin_pending = 0.3
+	print("%-52s %s" % ["right click 0.1 s after pressing spin", await _run(["stiff_right"], [])])
+	m._spin_pending = 0.0
+	# A QB who can still pass: right click is aim, but mid-spin it's the pop.
+	st.status = AthleteState.Status.SPIN
+	st.status_timer = 1.0
+	Input.action_press("aim")
+	print("%-52s %s" % ["QB mid-spin, right click (also aim)", await _run(["stiff_right"], [])])
+	Input.action_release("aim")
 	m.session.sv_players[1].state.status = AthleteState.Status.OK
 	m.session.sv_players[1].counter_cd = 0.0
 	await _run(["stiff_left"], [])

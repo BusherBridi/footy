@@ -22,8 +22,8 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 				s.status = AthleteState.Status.DOWN
 				s.status_timer = tuning["tackle"]["dive_ground_time"]
 			elif s.status == AthleteState.Status.SPIN:
-				# Pop out of the spin to the side chosen with the stick, with a burst of speed.
-				s.heading = s.heading.rotated(s.spin_side * deg_to_rad(m["pop_angle_deg"]))
+				# Pop out of the spin to the chosen side, with a burst of speed.
+				s.heading = s.heading.rotated(signf(s.spin_side) * deg_to_rad(m["pop_angle_deg"]))
 				s.speed = maxf(s.speed, run_speed * float(m["pop_speed_mult"]))
 				s.status = AthleteState.Status.POP
 				s.status_timer = m["pop_time"]
@@ -39,8 +39,9 @@ static func step(s: AthleteState, move: Vector2, sprint: bool, dt: float, tuning
 	var wrapped := s.status == AthleteState.Status.WRAPPED
 	var holding := s.status == AthleteState.Status.HOLDING
 	var blocked := s.status == AthleteState.Status.BLOCKED     # placed by the referee each tick
-	if spinning and mag >= float(m["spin_side_input"]):
-		# Hold left or right of your running direction to choose the pop side.
+	if spinning and absi(s.spin_side) < 2 and mag >= float(m["spin_side_input"]):
+		# Hold left or right of your running direction to choose the pop side. A side picked
+		# with a hand button (stored as -2 / +2) is final: the stick can't change it.
 		var side := s.heading.cross(want)
 		if absf(side) >= float(m["spin_side_cross"]):
 			s.spin_side = 1 if side > 0.0 else -1

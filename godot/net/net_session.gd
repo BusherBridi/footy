@@ -587,7 +587,7 @@ func _client_tick(dt: float) -> void:
 	if inp.get("spin_side", 0) != 0:
 		var pop := int(inp["spin_side"])
 		if cl_state.status == AthleteState.Status.SPIN:
-			cl_state.spin_side = pop      # predicted: the pop happens on our screen right away
+			cl_state.spin_side = 2 * pop  # predicted (and locked): the pop happens on our screen right away
 		_send(func(): if cl_connected: rpc_id(1, "rpc_spin_side", pop))
 	if inp.get("lateral", false):
 		var lat_yaw: float = inp.get("yaw", 0.0)
@@ -1164,7 +1164,7 @@ func _sv_counter(id: int, kind: int) -> void:
 func _sv_spin_side(id: int, side: int) -> void:
 	var p: SvPlayer = sv_players.get(id)
 	if p != null and p.state.status == AthleteState.Status.SPIN:
-		p.state.spin_side = clampi(side, -1, 1)
+		p.state.spin_side = 2 * clampi(side, -1, 1)      # locked: the stick won't change it
 
 
 func _sv_stiffarm(id: int, side := 0) -> void:

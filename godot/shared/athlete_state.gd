@@ -14,7 +14,7 @@ var cut_cooldown := 0.0
 var prev_dir := Vector2.ZERO     # last frame's stick direction, for flick detection
 var status := Status.OK          # set by the referee (tackles); movement just obeys it
 var status_timer := 0.0
-var spin_side := 0                # -1 left, 0 straight, +1 right: where the spin will pop out
+var spin_side := 0                # where the spin pops out: -1 left, 0 straight, +1 right (stick); -2 / +2 picked with a hand button (locked)
 var juke_timer := 0.0
 var carrying := false            # holding the ball: runs a little slower so pursuit angles work
 var stance_dir := Vector2.ZERO   # stance: the locked facing (zero = not in stance)
