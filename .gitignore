@@ -1,2 +1,4 @@
 .godot/
 *.import
+# Asset import settings carry the retarget bone maps: keep them in git.
+!godot/assets/**/*.import
