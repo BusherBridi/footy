@@ -299,6 +299,8 @@
     "min_set_time": 0.5,
     "rush_time": 3.0,
     "dead_time": 2.5,
+    "half_seconds": 180.0,
+    "half_break": 3.0,
     "barrier_margin": 0.3,
     "max_play_time": 30.0,
     "receiver_x_m": [

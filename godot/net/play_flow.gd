@@ -33,6 +33,12 @@ var try_points := 0           # 0 = normal play; 1 or 2 while running a try afte
 var pass_thrown := false      # the one forward pass of this play is used up
 var intercepted := false      # the defense picked off the pass this play
 var _play_start := {}         # down, spot and score as this play began (for redo)
+var half := 1                 # 1st half, 2nd half; 3 = sudden death
+var clock := 0.0              # seconds left in the half
+var clock_running := false    # stops after scores and turnovers until the next snap
+var game_over := false
+var winner := -1
+var first_offense := 0        # who had the ball first: the other team starts the 2nd half
 
 var _next_offense := 0
 var _next_los_z := 0.0
@@ -107,6 +113,12 @@ func start() -> void:
 	_assign_teams()
 	score = [0, 0]
 	offense = 0
+	first_offense = offense
+	half = 1
+	clock = float(_m()["half_seconds"])
+	clock_running = false
+	game_over = false
+	winner = -1
 	try_points = 0
 	los_z = _z_at_own_yard(0, float(_m()["start_yard"]))
 	down = 1
@@ -224,7 +236,7 @@ func _order_team(team: int) -> Array:
 
 func _setup_play() -> void:
 	_play_start = {"offense": offense, "los_z": los_z, "down": down, "gain_z": gain_z,
-		"try": try_points, "score": score.duplicate()}
+		"try": try_points, "score": score.duplicate(), "half": half, "clock": clock, "running": clock_running}
 	play_no += 1
 	pass_thrown = false
 	intercepted = false
@@ -327,6 +339,8 @@ func _snap() -> void:
 		s.ball_holder = qb_id
 		s.ball_live = false
 		snap_qb_pos = s.sv_players[qb_id].state.pos
+	if half <= 2 and try_points == 0:
+		clock_running = true
 	s.announce("Hike!")
 
 
@@ -346,6 +360,11 @@ func redo_play() -> void:
 	gain_z = _play_start["gain_z"]
 	try_points = _play_start["try"]
 	score = _play_start["score"].duplicate()
+	half = _play_start["half"]
+	clock = _play_start["clock"]
+	clock_running = _play_start["running"]
+	game_over = false
+	winner = -1
 	_setup_play()
 	s.announce("Redo: %s" % down_text())
 
@@ -383,14 +402,24 @@ func is_out(pos: Vector2) -> bool:
 
 func tick(dt: float) -> void:
 	phase_time += dt
+	if game_over:
+		return
+	# The game clock: runs from the snap through tackles and resets; not during tries,
+	# and stopped after scores and turnovers until the next snap. Sudden death is untimed.
+	if clock_running and try_points == 0 and half <= 2:
+		clock = maxf(0.0, clock - dt)
 	match phase:
 		Phase.PRE_SNAP:
-			if phase_time >= float(_m()["play_clock"]):
+			if clock <= 0.0 and half <= 2 and try_points == 0:
+				_end_half()
+			elif phase_time >= float(_m()["play_clock"]):
 				_snap()        # the play clock ran out: the game snaps it (no delay penalties)
 		Phase.LIVE:
-			_live_tick(dt)
+			_live_tick(dt)       # a play that's running when time expires is finished
 		Phase.DEAD:
-			if phase_time >= float(_m()["dead_time"]):
+			if phase_time >= float(_m()["dead_time"]) and clock <= 0.0 and half <= 2 and _next_try == 0:
+				_end_half()
+			elif phase_time >= float(_m()["dead_time"]):
 				offense = _next_offense
 				los_z = _next_los_z
 				down = _next_down
@@ -444,6 +473,8 @@ func _live_tick(dt: float) -> void:
 
 
 func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> void:
+	var score_before: Array = score.duplicate()
+	var was_try := try_points > 0
 	phase = Phase.DEAD
 	phase_time = 0.0
 	rush_left = 0.0
@@ -503,6 +534,13 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 			else:
 				_next_down = down + 1
 				_next_gain_z = gain_z
+	# The clock stops after scores and turnovers, until the next snap.
+	if score != score_before or _next_offense != offense or was_try:
+		clock_running = false
+	# Sudden death: the first score of any kind wins (no try).
+	var ends_game := half == 3 and score != score_before
+	if ends_game:
+		_next_try = 0
 	# A dead ball can't be picked up or played.
 	if s.ball_kind == NetSession.Ball.HELD:
 		var c: AthleteState = s.sv_players[s.ball_holder].state
@@ -511,6 +549,46 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 	s.ball_holder = 0
 	s.ball_live = false
 	s.announce("%s   [Orange %d - %d Blue]" % [result, score[0], score[1]])
+	if ends_game:
+		_finish_game()
+
+
+## Time ran out with no try left to play: halftime, the end of the game, or sudden death.
+func _end_half() -> void:
+	clock_running = false
+	phase = Phase.DEAD
+	phase_time = -float(_m()["half_break"])      # a longer pause before the next play
+	s.ball_kind = NetSession.Ball.LOOSE
+	s.ball_holder = 0
+	s.ball_live = false
+	var tally := "[Orange %d - %d Blue]" % [score[0], score[1]]
+	if half == 1:
+		half = 2
+		clock = float(_m()["half_seconds"])
+		_kickoff_to(1 - first_offense)
+		s.announce("HALFTIME %s. %s gets the ball to start the 2nd half" % [tally, NetSession.TEAM_NAMES[1 - first_offense]])
+	elif score[0] != score[1]:
+		_finish_game()
+	else:
+		half = 3
+		clock = 0.0
+		var coin := s.rng.randi() % 2
+		_kickoff_to(coin)
+		s.announce("SUDDEN DEATH: tied %d-%d. Coin toss: %s gets the ball. First score wins" % [score[0], score[1], NetSession.TEAM_NAMES[coin]])
+
+
+func _finish_game() -> void:
+	game_over = true
+	clock_running = false
+	winner = 0 if score[0] > score[1] else 1
+	phase = Phase.DEAD
+	s.announce("FINAL: Orange %d - %d Blue. %s WINS!" % [score[0], score[1], NetSession.TEAM_NAMES[winner].to_upper()])
+
+
+## Clock as m:ss.
+func clock_text() -> String:
+	var secs := int(ceil(clock))
+	return "%d:%02d" % [secs / 60, secs % 60]
 
 
 ## After a score: no kickoffs, the other team starts on its own 15.
@@ -582,4 +660,5 @@ func view() -> Dictionary:
 	return {"phase": phase, "offense": offense, "dir": dir(), "los": los_z, "rush": rush_left,
 		"qb": qb_id, "play_no": play_no, "phase_time": phase_time, "down": down, "gain": gain_z,
 		"score0": score[0], "score1": score[1], "try": try_points, "pass_used": 1 if pass_thrown else 0, "down_text": down_text(),
+		"half": half, "clock": clock, "clock_running": 1 if clock_running else 0, "game_over": 1 if game_over else 0, "winner": winner,
 		"spot_text": yard_line_text(los_z, offense)}

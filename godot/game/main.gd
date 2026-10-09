@@ -2,7 +2,7 @@ extends Node3D
 ## Entry point: builds the placeholder world, then hosts or joins a match.
 ## Command line (after `--`): --match (play vs bots), --autoplay (the AI plays your
 ## athlete too), --host (sandbox), --join=IP, --port=N, --bot, --log,
-## --lat=MS, --loss=PCT for fake lag. Bots: --bot (wander), --route[=go|out|in|curl|post]
+## --lat=MS, --loss=PCT for fake lag, --half=SECONDS for short halves. Bots: --bot (wander), --route[=go|out|in|curl|post]
 ## (receiver), --qb (takes the ball and throws; combine with --bot or --route).
 
 var field := Field.new()
@@ -55,6 +55,11 @@ var _sens_slider := HSlider.new()
 var _sens_label := Label.new()
 var _pause_note := Label.new()
 var _resume_btn: Button
+var end_panel := Control.new()
+var _end_title := Label.new()
+var _end_score := Label.new()
+var _end_line := Label.new()
+var _end_again: Button
 var _host_only: Array[Control] = []
 var settings := ConfigFile.new()
 const SETTINGS_PATH := "user://settings.cfg"
@@ -103,6 +108,8 @@ func _ready() -> void:
 		Tuning.data["net"]["sim_latency_ms"] = float(args["lat"])
 	if args.has("loss"):
 		Tuning.data["net"]["sim_loss_pct"] = float(args["loss"])
+	if args.has("half"):
+		Tuning.data["match"]["half_seconds"] = float(args["half"])     # short halves for testing
 
 	session.autopilot = args.has("autoplay")
 	session.log_verbose = args.has("log")
@@ -307,6 +314,7 @@ func _build_ui() -> void:
 	_build_menu(layer)
 	_build_hud_bits(layer)
 	_build_pause(layer)
+	_build_end(layer)
 	_build_card(layer)
 
 
@@ -653,7 +661,7 @@ func _fill_card() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and not menu.visible and not pause_menu.visible:
+	if event is InputEventMouseButton and event.pressed and not menu.visible and not pause_menu.visible and not end_panel.visible:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -839,9 +847,81 @@ func _update_match_view() -> void:
 			phase_text = ("Rush in %.1f" % rush) if rush > 0.0 else "LIVE"
 		PlayFlow.Phase.DEAD:
 			phase_text = "Play over"
-	match_hud.text = "ORANGE %d  -  %d BLUE\n%s %s  |  ball on the %s\n%s %s  |  %s" % [
-		int(v["score0"]), int(v["score1"]), NetSession.TEAM_NAMES[int(v["offense"])].to_upper(),
+	match_hud.text = "ORANGE %d  -  %d BLUE      %s\n%s %s  |  ball on the %s\n%s %s  |  %s" % [
+		int(v["score0"]), int(v["score1"]), _clock_text(v), NetSession.TEAM_NAMES[int(v["offense"])].to_upper(),
 		_down_text(v), _spot_text(float(v["los"]), int(v["dir"])), team_name, role, phase_text]
+	_show_end(v)
+
+
+## "1st half 2:31", "2nd half 0:12 (stopped)", "SUDDEN DEATH".
+func _clock_text(v: Dictionary) -> String:
+	var h := int(v.get("half", 1))
+	if h >= 3:
+		return "SUDDEN DEATH"
+	var secs := int(ceil(float(v.get("clock", 0.0))))
+	var t := "%s half  %d:%02d" % ["1st" if h == 1 else "2nd", secs / 60, secs % 60]
+	if int(v.get("try", 0)) > 0:
+		t += " (try)"
+	elif int(v.get("clock_running", 0)) == 0 and int(v.get("play_no", 0)) > 1:
+		t += " (stopped)"
+	return t
+
+
+## The end screen: final score and what next.
+func _build_end(layer: CanvasLayer) -> void:
+	end_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	end_panel.visible = false
+	layer.add_child(end_panel)
+	var dim := ColorRect.new()
+	dim.color = Color(0.02, 0.04, 0.08, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	end_panel.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	end_panel.add_child(center)
+	var panel := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.12, 0.18, 0.95)
+	style.set_corner_radius_all(16)
+	style.set_content_margin_all(40)
+	panel.add_theme_stylebox_override("panel", style)
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	panel.add_child(box)
+	for l in [_end_title, _end_score, _end_line]:
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		box.add_child(l)
+	_end_title.add_theme_font_size_override("font_size", 40)
+	_end_title.add_theme_color_override("font_color", Color(1.0, 0.75, 0.3))
+	_end_score.add_theme_font_size_override("font_size", 64)
+	_end_line.add_theme_font_size_override("font_size", 28)
+	_end_again = _pause_button("Play again", func(): _reload("match"))
+	box.add_child(_end_again)
+	box.add_child(_pause_button("Back to title", func(): _reload("title")))
+
+
+func _show_end(v: Dictionary) -> void:
+	var over := int(v.get("game_over", 0)) == 1
+	if over == end_panel.visible:
+		return
+	end_panel.visible = over
+	if not over:
+		return
+	var w := int(v["winner"])
+	_end_title.text = "FINAL"
+	_end_score.text = "ORANGE %d  -  %d BLUE" % [int(v["score0"]), int(v["score1"])]
+	var mine := session.local_team()
+	var verdict := "%s wins!" % NetSession.TEAM_NAMES[w]
+	if mine >= 0:
+		verdict += "  You win!" if mine == w else "  You lose."
+	_end_line.text = verdict
+	_end_line.add_theme_color_override("font_color", Athlete.TEAM_COLORS[w])
+	var host := session.mode == NetSession.Mode.HOST
+	_end_again.disabled = not host
+	_end_again.text = "Play again" if host else "Play again (the host decides)"
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_end_again.grab_focus()
 
 
 ## "2nd & 7 to midfield", "3rd & goal", "2-point try": from the play numbers alone.

@@ -504,12 +504,13 @@ func _host_tick(dt: float) -> void:
 	var ball_i := PackedInt32Array([ball_kind, ball_holder, ball_launch_tick])
 	var ball_f := PackedFloat32Array([ball_p0.x, ball_p0.y, ball_p0.z, ball_yaw, ball_charge,
 		1.0 if ball_lob else 0.0, ball_loose.x, ball_loose.y, ball_loose.z, ball_angle])
-	var play_i := PackedInt32Array([-1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-	var play_f := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	var play_i := PackedInt32Array([-1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+	var play_f := PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0])
 	if flow != null:
 		var v := flow.view()
-		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"], v["down"], v["score0"], v["score1"], v["try"], v["pass_used"]])
-		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"], v["gain"]])
+		play_i = PackedInt32Array([v["phase"], v["offense"], v["dir"], v["qb"], v["play_no"], v["down"], v["score0"], v["score1"], v["try"], v["pass_used"],
+			v["half"], v["game_over"], v["clock_running"], v["winner"]])
+		play_f = PackedFloat32Array([v["los"], v["rush"], v["phase_time"], v["gain"], v["clock"]])
 	for id in multiplayer.get_peers():
 		var peer_id: int = id
 		var tick := sv_tick
@@ -637,7 +638,8 @@ func rpc_snapshot(tick: int, ids: PackedInt32Array, data: PackedFloat32Array, ba
 		team_view[ids[i]] = int(data[i * SNAP_STRIDE + 15])
 	play_view = {} if play_i[0] < 0 else {"phase": play_i[0], "offense": play_i[1], "dir": play_i[2],
 		"qb": play_i[3], "play_no": play_i[4], "down": play_i[5], "score0": play_i[6], "score1": play_i[7],
-		"try": play_i[8], "pass_used": play_i[9], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2], "gain": play_f[3]}
+		"try": play_i[8], "pass_used": play_i[9], "half": play_i[10], "game_over": play_i[11], "clock_running": play_i[12],
+		"winner": play_i[13], "los": play_f[0], "rush": play_f[1], "phase_time": play_f[2], "gain": play_f[3], "clock": play_f[4]}
 	latest_tick = tick
 	snap_buffer.append({"tick": tick, "players": players, "ball_i": ball_i, "ball_f": ball_f})
 	latest_holder = ball_i[1] if ball_i[0] == Ball.HELD else 0
