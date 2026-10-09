@@ -171,6 +171,20 @@
     "tie_margin": 0.05,
     "show_ring": true
   },
+  "swat": {
+    "window_s": 0.35,
+    "pick_from_s": 0.06,
+    "pick_to_s": 0.18,
+    "radius": 1.5,
+    "min_height": 0.2,
+    "max_height": 2.9,
+    "pick_face_deg": 70.0,
+    "cooldown": 1.2,
+    "cost": 0.06,
+    "whiff_stumble": 0.35,
+    "fx_time": 0.45,
+    "max_rewind_ms": 250.0
+  },
   "tackle": {
     "reach": 1.6,
     "arc_half_deg": 80.0,
@@ -297,7 +311,12 @@
     ],
     "cover_react_s": 0.25,
     "cover_sprint_gap_m": 3.0,
-    "two_point_chance": 0.35
+    "two_point_chance": 0.35,
+    "swat_chance": 0.6,
+    "swat_lead_s": 0.12,
+    "swat_error_s": 0.08,
+    "swat_turn_s": 0.25,
+    "swat_look_ahead_s": 0.6
   },
   "fx": {
     "enabled": true,
@@ -342,7 +361,8 @@
       "pop": "Sprint",
       "throw": "OverhandThrow",
       "stiff_arm": "Punch_Jab",
-      "catch": "Spell_Simple_Shoot"
+      "catch": "Spell_Simple_Shoot",
+      "swat": "Jump"
     },
     "dive_tilt_deg": 75.0,
     "dive_lift": 0.45,

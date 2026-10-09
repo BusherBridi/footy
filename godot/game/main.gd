@@ -35,6 +35,7 @@ var _event_time := 0.0
 var _take_latch := false
 var _try_pick := 0
 var _spin_latch := false
+var _swat_latch := false
 var _stiff_side := 0             # -1 / +1: a stiff arm on that side is waiting to be sent
 var _pop_side := 0               # -1 / +1: mid-spin, pop out that way
 var _hand_first := 0             # chord detection: 1 = first hand button down, 2 = second, 0 = none
@@ -183,6 +184,8 @@ func _provide_input() -> Dictionary:
 	_hurdle_latch = false
 	var spin := _spin_latch
 	_spin_latch = false
+	var swat := _swat_latch
+	_swat_latch = false
 	var side := _stiff_side
 	_stiff_side = 0
 	var pop := _pop_side
@@ -206,6 +209,7 @@ func _provide_input() -> Dictionary:
 		"lateral": lateral,
 		"hurdle": hurdle,
 		"spin": spin,
+		"swat": swat,
 		"side": side,
 		"spin_side": pop,
 	}
@@ -391,6 +395,7 @@ func _fill_card() -> void:
 		["Tackle (again: let go of a hold)", L.call("tackle", false), L.call("tackle", true)],
 		["Strip (join a wrap)", L.call("strip", false), L.call("strip", true)],
 		["Dive", both.call("tackle", "strip", false), both.call("tackle", "strip", true)],
+		["Swat / intercept (press just before the ball arrives)", L.call("swat", false), L.call("swat", true)],
 		["OTHER"],
 		["Pick the 1 / 2-point try", "%s / %s" % [L.call("try_one", false), L.call("try_two", false)], "%s / %s" % [L.call("try_one", true), L.call("try_two", true)]],
 		["Camera style", L.call("cycle_camera", false), L.call("cycle_camera", true)],
@@ -482,8 +487,10 @@ func _physics_process(_delta: float) -> void:
 		_lateral_latch = true
 	if Input.is_action_just_pressed("hurdle"):
 		_hurdle_latch = true
-	if Input.is_action_just_pressed("spin"):
+	if Input.is_action_just_pressed("spin") and session.local_has_ball():
 		_spin_latch = true
+	if Input.is_action_just_pressed("swat") and not session.local_has_ball():
+		_swat_latch = true
 	if Input.is_action_just_pressed("snap") and not session.local_has_ball():
 		_take_latch = true
 	if Input.is_action_just_pressed("add_chaser"):

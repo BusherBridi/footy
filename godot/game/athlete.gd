@@ -183,7 +183,7 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 		return
 
 	# Capsule fallback.
-	_arm.visible = fx >= 1
+	_arm.visible = fx >= 1 and fx <= 3
 	_arm.position.x = 0.0 if fx == 1 else (-0.7 if fx == 2 else 0.7)
 	_arm.position.z = -0.85 if fx == 1 else -0.35
 	_arm.rotation.y = 0.0 if fx == 1 else (0.9 if fx == 2 else -0.9)
@@ -205,7 +205,7 @@ func set_visual(pos: Vector2, heading: Vector2, speed := 0.0, status := 0, fx :=
 func _animate(speed: float, status: int, fx: int) -> void:
 	var art := Tuning.section("art")
 	if fx >= 1 and _last_fx == 0:
-		play_oneshot("stiff_arm")
+		play_oneshot("swat" if fx == 4 else "stiff_arm")
 	_last_fx = fx
 	var key := ""
 	match status:

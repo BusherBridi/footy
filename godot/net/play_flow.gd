@@ -31,6 +31,7 @@ var gain_z := 0.0             # the line to gain: midfield, then the goal line
 var score := [0, 0]
 var try_points := 0           # 0 = normal play; 1 or 2 while running a try after a touchdown
 var pass_thrown := false      # the one forward pass of this play is used up
+var intercepted := false      # the defense picked off the pass this play
 
 var _next_offense := 0
 var _next_los_z := 0.0
@@ -214,6 +215,8 @@ func _order_team(team: int) -> Array:
 func _setup_play() -> void:
 	play_no += 1
 	pass_thrown = false
+	intercepted = false
+	s.swat_note = ""
 	phase = Phase.PRE_SNAP
 	phase_time = 0.0
 	rush_left = float(_m()["rush_time"])
@@ -320,6 +323,14 @@ func is_live() -> bool:
 	return phase == Phase.LIVE
 
 
+## The defense caught the pass. On a try that ends it; otherwise the play goes on (the return).
+func on_interception(id: int) -> void:
+	intercepted = true
+	possession_team = team_of(id)
+	if try_points > 0:
+		_end_play("Intercepted by %s" % s.name_of(id), s.sv_players[id].state.pos.y, team_of(id))
+
+
 ## The forward pass rule: one per play, by the offense, thrown from behind the line.
 func can_pass(id: int) -> bool:
 	if phase != Phase.LIVE or pass_thrown or team_of(id) != offense or not s.sv_players.has(id):
@@ -397,7 +408,7 @@ func _live_tick(dt: float) -> void:
 		var reason := s.dead_reason
 		s.dead_reason = ""
 		if reason == "incomplete":
-			_end_play("Incomplete pass", los_z, offense)
+			_end_play("Incomplete pass" + (" (%s)" % s.swat_note if s.swat_note != "" else ""), los_z, offense)
 		else:
 			_end_play(reason, s.dead_spot.y, s.dead_team if s.dead_team >= 0 else possession_team)
 		return
@@ -428,6 +439,10 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 		_next_los_z = attack_goal_z(team) - team_dir(team) * _try_yard(1) * yard()
 		_next_down = 1
 		_next_gain_z = attack_goal_z(team)
+	elif (spot_z - own_goal_z(team)) * team_dir(team) < 0.0 and intercepted and team != offense:
+		# Picked off and downed in your own end zone: a touchback, not a safety.
+		result = "%s in the end zone. TOUCHBACK" % text
+		_kickoff_to(team)
 	elif (spot_z - own_goal_z(team)) * team_dir(team) < 0.0:
 		# Downed in your own end zone.
 		score[1 - team] += int(m["safety_points"])
@@ -448,7 +463,7 @@ func _end_play(text: String, spot_z: float, team: int, touchdown := false) -> vo
 			_next_gain_z = _first_gain(team, spot)
 		else:
 			var gained := (spot - los_z) * dir() / yard()
-			result = text if text == "Incomplete pass" else "%s (%+d yards)" % [text, roundi(gained)]
+			result = text if text.begins_with("Incomplete pass") else "%s (%+d yards)" % [text, roundi(gained)]
 			if not goal_to_go() and (spot - gain_z) * dir() >= 0.0:
 				result += ". FIRST DOWN! Four downs to score"
 				_next_down = 1
@@ -521,6 +536,9 @@ func bot_context(id: int) -> Dictionary:
 		var fl := BallFlight.launch(s.ball_p0, s.ball_yaw, s.ball_charge, s.ball_lob, Tuning.data, s.ball_angle)
 		ctx["land"] = Vector2(fl["land"].x, fl["land"].z)
 		ctx["thrower_team"] = team_of(s.ball_thrower)
+		ctx["launch_tick"] = s.ball_launch_tick
+		ctx["flight"] = {"p0": s.ball_p0, "fl": fl, "g": float(Tuning.section("throw")["gravity"]),
+			"t": float(s.sv_tick - s.ball_launch_tick) / float(Tuning.section("net")["tick_hz"])}
 	return ctx
 
 

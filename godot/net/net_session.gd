@@ -33,10 +33,12 @@ class SvPlayer:
 	var counter_weak := false    # a status counter (spin, truck, hurdle) thrown on an empty bar
 	var stiff_weak := false      # fired with too little stamina
 	var stiff_side := 0          # which flank the arm covers: -1 left, 0 either (weaker), +1 right
-	var fx := 0                  # visual cue: 1 = stiff arm out
+	var fx := 0                  # visual cue: 1-3 = stiff arm out (forward, left, right), 4 = swat reach
 	var dodged := false          # this dive was already juked past (announce once)
 	var fx_timer := 0.0
 	var team := -1               # 0 or 1 in a match; -1 in the sandbox
+	var swat_from := -1.0        # server tick (fractional) the swat reach started; -1 = not reaching
+	var swat_cd := 0.0
 
 	func reset_play_fields() -> void:
 		tackle_cd = 0.0
@@ -52,6 +54,8 @@ class SvPlayer:
 		fx = 0
 		fx_timer = 0.0
 		dodged = false
+		swat_from = -1.0
+		swat_cd = 0.0
 
 enum Ball { LOOSE, HELD, FLIGHT }
 enum ThrowMode { AIM, HOLD }   # AIM: pitch = launch angle, hold = power. HOLD: old charge-for-distance throw.
@@ -94,6 +98,8 @@ var ball_lob := false
 var ball_lateral := false         # a pitch: if nobody catches it, it stays live like a fumble
 var ball_angle := -1.0           # launch angle (radians) for angle+power throws, -1 for the old model
 var ball_thrower := 0
+var swat_note := ""              # "swatted by ..." for the incomplete-pass result, else empty
+var last_swat_why := ""          # timing details of the last swat or pick (debug log, tests)
 var ball_loose := Vector3(0, 0.3, 0)
 var ball_live := false           # a fumble: loose, moving, and anyone nearby picks it up
 var ball_vel := Vector2.ZERO
@@ -325,6 +331,8 @@ func _host_tick(dt: float) -> void:
 			_sv_dive(1)
 		if inp.get("spin", false):
 			_sv_counter(1, AthleteState.Status.SPIN)
+		if inp.get("swat", false):
+			_sv_swat(1, float(sv_tick) + _alpha())      # the tick the host was looking at
 		if inp.get("spin_side", 0) != 0:
 			_sv_spin_side(1, int(inp["spin_side"]))
 		if inp.get("lateral", false):
@@ -341,6 +349,7 @@ func _host_tick(dt: float) -> void:
 		me.last_seq += 1
 		me.queue.append([me.last_seq, inp["move"], inp["sprint"]])
 
+	_swat_timers(dt)
 	for id in sv_players:
 		var q: SvPlayer = sv_players[id]
 		q.tackle_cd = maxf(0.0, q.tackle_cd - dt)
@@ -440,6 +449,8 @@ func _team_bot_tick(id: int, dt: float) -> void:
 		_sv_counter(id, AthleteState.Status.TRUCK)
 	if bi.get("hurdle", false):
 		_sv_counter(id, AthleteState.Status.HURDLE)
+	if bi.get("swat", false):
+		_sv_swat(id, float(sv_tick))
 
 
 ## Bots throw with the charge-for-distance model: it lands exactly where they aim.
@@ -465,6 +476,9 @@ func _client_tick(dt: float) -> void:
 		_send(func(): if cl_connected: rpc_id(1, "rpc_dive"))
 	if inp.get("spin", false):
 		_send(func(): if cl_connected: rpc_id(1, "rpc_counter", AthleteState.Status.SPIN))
+	if inp.get("swat", false):
+		var seen := render_tick       # the ball we reacted to is drawn at this server tick
+		_send(func(): if cl_connected: rpc_id(1, "rpc_swat", seen))
 	if inp.get("spin_side", 0) != 0:
 		var pop := int(inp["spin_side"])
 		if cl_state.status == AthleteState.Status.SPIN:
@@ -594,6 +608,12 @@ func rpc_try_pick(points: int) -> void:
 func rpc_strip() -> void:
 	if mode == Mode.HOST:
 		_sv_strip(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "reliable")
+func rpc_swat(seen_tick: float) -> void:
+	if mode == Mode.HOST:
+		_sv_swat(multiplayer.get_remote_sender_id(), seen_tick)
 
 
 @rpc("any_peer", "reliable")
@@ -1116,6 +1136,8 @@ func _ball_tick(dt: float) -> void:
 		var bpos := BallFlight.position_at(ball_p0, fl, g, ts)
 		if ball_lateral and Vector2(bpos.x - ball_p0.x, bpos.z - ball_p0.z).length() < float(Tuning.section("throw")["lateral_min_travel"]):
 			continue       # a pitch can't be grabbed right at the thrower's hands
+		if _swat_check(ts, bpos):
+			return
 		var cands: Array = []
 		for id in sv_players:
 			if id == ball_thrower and ts < float(c["thrower_grace"]):
@@ -1154,6 +1176,159 @@ func _ball_tick(dt: float) -> void:
 		ball_loose = fl["land"]
 		_loose_after_flight()
 		_log_event("lateral hit the ground (live ball)" if ball_lateral else "incomplete: ball hit the ground")
+
+
+# ------------------------------------------------------------------- swat and pick
+
+## A defender's "play the ball" press. The reach is timed from the tick the player was
+## looking at when they pressed (lag-fair, rewound at most max_rewind_ms).
+func _sv_swat(id: int, seen_tick: float) -> void:
+	var p: SvPlayer = sv_players.get(id)
+	if p == null or not _live() or p.swat_cd > 0.0 or p.swat_from >= 0.0:
+		return
+	if p.state.status != AthleteState.Status.OK and p.state.status != AthleteState.Status.POP:
+		return
+	if ball_kind != Ball.FLIGHT or not _may_swat(id):
+		return        # only a ball in the air, thrown by the other team
+	var sw: Dictionary = Tuning.section("swat")
+	var dt := _tick_dt()
+	var rewind := float(sw["max_rewind_ms"]) / 1000.0 / dt
+	p.swat_from = clampf(seen_tick, float(sv_tick) - rewind, float(sv_tick))
+	p.swat_cd = sw["cooldown"]
+	p.state.stamina = maxf(0.0, p.state.stamina - float(sw["cost"]))
+	p.fx = 4
+	p.fx_timer = sw["fx_time"]
+	# Catch up on the stretch of flight between when they pressed and now.
+	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data, ball_angle)
+	var g: float = Tuning.section("throw")["gravity"]
+	var ts := (p.swat_from - float(ball_launch_tick)) * dt
+	var t_now := float(sv_tick - ball_launch_tick) * dt
+	while ts < t_now and ball_kind == Ball.FLIGHT:
+		var tt := clampf(ts, 0.0, float(fl["T"]))
+		if _swat_check(tt, BallFlight.position_at(ball_p0, fl, g, tt), id):
+			return
+		ts += dt / 3.0
+
+
+func _may_swat(id: int) -> bool:
+	if id == ball_thrower:
+		return false
+	return flow == null or flow.team_of(id) != flow.team_of(ball_thrower)
+
+
+## Is any reaching defender touching the ball at flight time ts? Resolves a swat or a pick.
+## The flight is deterministic, so once the ball enters the reach we follow it ahead to the
+## moment it would be in the defender's hands (a pick chance), unless a receiver gets to
+## it first or it slips past the fingertips (then it's a swat at first touch).
+func _swat_check(ts: float, bpos: Vector3, only_id := 0) -> bool:
+	var sw: Dictionary = Tuning.section("swat")
+	var dt := _tick_dt()
+	var window := float(sw["window_s"]) / dt
+	var tick_at := float(ball_launch_tick) + ts / dt
+	var best := 0
+	var best_d := float(sw["radius"])
+	for id in sv_players:
+		var p: SvPlayer = sv_players[id]
+		if p.swat_from < 0.0 or (only_id != 0 and id != only_id):
+			continue
+		if tick_at < p.swat_from or tick_at > p.swat_from + window or not _may_swat(id):
+			continue
+		var d := _reach_distance(p.state.pos, bpos)
+		if d >= 0.0 and d <= best_d:
+			best_d = d
+			best = id
+	if best == 0:
+		return false
+	var p: SvPlayer = sv_players[best]
+	var fl := BallFlight.launch(ball_p0, ball_yaw, ball_charge, ball_lob, Tuning.data, ball_angle)
+	var g: float = Tuning.section("throw")["gravity"]
+	var contact_t := ts
+	var contact := bpos
+	var in_hands := false
+	var rec_d := _receiver_distance(bpos, best)
+	var tt := ts
+	while rec_d == INF:
+		var b := BallFlight.position_at(ball_p0, fl, g, tt)
+		if _reach_distance(p.state.pos, b) < 0.0 or tt > float(fl["T"]) or float(ball_launch_tick) + tt / dt > p.swat_from + window:
+			break         # slipped past the fingertips: it's a swat at first touch
+		var rd := _receiver_distance(b, best)
+		if CatchRules.zone_distance(p.state.pos, 0.0, b, Tuning.data) >= 0.0 or rd < INF:
+			contact_t = tt
+			contact = b
+			rec_d = rd
+			in_hands = CatchRules.zone_distance(p.state.pos, 0.0, b, Tuning.data) >= 0.0
+			break
+		tt += dt / 3.0
+	var early := (float(ball_launch_tick) + contact_t / dt - p.swat_from) * dt     # press to contact
+	p.swat_from = -1.0
+	var at := Vector2(contact.x, contact.z)
+	var to_ball := at - p.state.pos
+	var facing := to_ball.length() < 0.2 or rad_to_deg(absf(p.state.heading.angle_to(to_ball))) <= float(sw["pick_face_deg"])
+	var timed := early >= float(sw["pick_from_s"]) and early <= float(sw["pick_to_s"])
+	var beats := to_ball.length() < rec_d - float(Tuning.section("catch")["tie_margin"])
+	var why := "pressed %.2f s before contact, %s, %s, %s" % [early, "facing" if facing else "not facing",
+		"in the hands" if in_hands else "fingertips", "beat the receiver" if beats else "receiver there too"]
+	last_swat_why = why
+	if timed and facing and in_hands and beats:
+		ball_kind = Ball.HELD
+		ball_holder = best
+		ball_live = false
+		_fx("catch", at, 1.0)
+		_fx("hit", at, 0.6)
+		_announce("INTERCEPTED by %s!" % _name(best))
+		_log_event("pick by %s (%s)" % [_name(best), why])
+		if flow != null:
+			flow.on_interception(best)
+	else:
+		ball_kind = Ball.LOOSE
+		ball_loose = Vector3(contact.x, float(Tuning.section("throw")["ball_radius"]), contact.z)
+		_loose_after_flight()
+		swat_note = "swatted by %s" % _name(best)
+		_fx("hit", at, 0.5)
+		_announce("SWATTED by %s" % _name(best))
+		_log_event("swat by %s (%s)" % [_name(best), why])
+	return true
+
+
+## Distance from a defender to the ball if it's within their reach (taller than a catch zone), else -1.
+func _reach_distance(pos: Vector2, b: Vector3) -> float:
+	var sw: Dictionary = Tuning.section("swat")
+	if b.y < float(sw["min_height"]) or b.y > float(sw["max_height"]):
+		return -1.0
+	var d := pos.distance_to(Vector2(b.x, b.z))
+	return d if d <= float(sw["radius"]) else -1.0
+
+
+## How close the nearest player who may catch this ball is, if it's in their zone (else INF).
+func _receiver_distance(b: Vector3, swatter: int) -> float:
+	var out := INF
+	for id in sv_players:
+		if id == ball_thrower or id == swatter or (flow != null and not flow.can_catch(id, ball_thrower)):
+			continue
+		var q: SvPlayer = sv_players[id]
+		var rd := CatchRules.zone_distance(q.state.pos, q.state.speed, b, Tuning.data)
+		if rd >= 0.0:
+			out = minf(out, rd)
+	return out
+
+
+func _swat_timers(dt: float) -> void:
+	var window := float(Tuning.section("swat")["window_s"]) / dt
+	for id in sv_players:
+		var q: SvPlayer = sv_players[id]
+		q.swat_cd = maxf(0.0, q.swat_cd - dt)
+		if q.swat_from >= 0.0 and float(sv_tick) - q.swat_from > window:
+			_swat_whiff(id)
+
+
+## The reach found nothing: a short stumble to recover, so it can't be spammed.
+func _swat_whiff(id: int) -> void:
+	var p: SvPlayer = sv_players[id]
+	p.swat_from = -1.0
+	if p.state.status == AthleteState.Status.OK:
+		p.state.status = AthleteState.Status.STUMBLE
+		p.state.status_timer = Tuning.section("swat")["whiff_stumble"]
+	_log_event("%s swatted at air" % _name(id))
 
 
 ## An incomplete forward pass is dead; a dropped lateral is a live ball anyone can recover.

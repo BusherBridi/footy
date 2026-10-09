@@ -1,15 +1,17 @@
 extends Node3D
 ## Renders the Quaternius mannequin in a few clips side by side (needs a display, e.g. xvfb-run).
-##   godot --path godot --rendering-driver opengl3 res://tests/model_preview.tscn -- --shot=out.png --clips=A,B,C --t=0.5
+##   godot --path godot --rendering-driver opengl3 res://tests/model_preview.tscn -- --shot=out.png --clips=A,B,C --t=0.5 [--glb=res://...UAL1_Standard.glb]
 
 func _ready() -> void:
 	var out := "user://preview.png"
 	var clips := ["OverhandThrow", "Shield_Dash", "Hit_Knockback", "Slide_Loop"]
 	var t := 0.5
+	var glb := "res://assets/quaternius/UAL2_Standard.glb"
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--shot="): out = a.trim_prefix("--shot=")
 		elif a.begins_with("--clips="): clips = Array(a.trim_prefix("--clips=").split(","))
 		elif a.begins_with("--t="): t = float(a.trim_prefix("--t="))
+		elif a.begins_with("--glb="): glb = a.trim_prefix("--glb=")
 	var env := WorldEnvironment.new()
 	env.environment = Environment.new()
 	env.environment.background_mode = Environment.BG_COLOR
@@ -25,7 +27,7 @@ func _ready() -> void:
 	pm.size = Vector2(30, 30)
 	ground.mesh = pm
 	add_child(ground)
-	var scene: PackedScene = load("res://assets/quaternius/UAL2_Standard.glb")
+	var scene: PackedScene = load(glb)
 	for i in clips.size():
 		var m := scene.instantiate()
 		m.position = Vector3((i - (clips.size() - 1) * 0.5) * 1.8, 0, 0)

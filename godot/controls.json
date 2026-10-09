@@ -24,6 +24,7 @@
 
     "tackle":         {"keys": ["MouseLeft"],  "pad": ["RB"]},
     "strip":          {"keys": ["MouseRight"], "pad": ["LB"]},
+    "swat":           {"keys": ["E"],          "pad": ["B"]},
 
     "try_one":        {"keys": ["1"], "pad": ["DpadLeft"]},
     "try_two":        {"keys": ["2"], "pad": ["DpadRight"]},

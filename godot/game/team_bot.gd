@@ -7,7 +7,8 @@ extends RefCounted
 ##   receiver  runs a route, then finds space; runs to the ball when it's thrown to them
 ##   carrier   runs to daylight and uses stiff arms, jukes, trucks, spins and hurdles
 ##   defender  man coverage (the linebacker rushes once the timer ends), breaks on the
-##             ball, pursues and tackles the carrier, joins wraps and goes for strips
+##             ball, swats or picks passes, pursues and tackles the carrier, joins wraps
+##             and goes for strips
 
 var rng := RandomNumberGenerator.new()
 var _play := -1
@@ -26,6 +27,10 @@ var _lateral_roll := -1
 var _cover_target := Vector2.ZERO
 var _cover_timer := 0.0
 var _try_decided := false
+var _swat_throw := -1            # launch tick of the pass the swat decision below is for
+var _swat_go := false
+var _swat_lead := 0.0
+var _reach_until := -1.0         # flight time until which we keep squared up to the ball
 
 
 func _init() -> void:
@@ -331,6 +336,11 @@ func _ball_in_air(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 	var pos: Vector2 = ctx["pos"]
 	var my_team := int(ctx["team"])
 	var throwing_team := int(ctx.get("thrower_team", -1))
+	if my_team != throwing_team:
+		_try_swat(out, ctx, t)
+		if out.has("hold_move"):
+			out.erase("hold_move")
+			return
 	# Am I the closest player on my team (other than the thrower) to where it's coming down?
 	var me_d := pos.distance_to(land)
 	var closest := true
@@ -346,6 +356,54 @@ func _ball_in_air(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
 		_run_route(out, ctx)
 	else:
 		_cover(out, ctx, t)
+
+
+## Reach for a pass in the air: look ahead along the flight and press when the ball is
+## about _swat_lead seconds from reaching us. The lead carries a random error, so bots
+## sometimes pick it off, sometimes only get a hand on it, sometimes whiff.
+func _try_swat(out: Dictionary, ctx: Dictionary, t: Dictionary) -> void:
+	var ai: Dictionary = t["ai"]
+	var sw: Dictionary = t["swat"]
+	if int(ctx["launch_tick"]) != _swat_throw:
+		_swat_throw = int(ctx["launch_tick"])
+		_swat_go = rng.randf() < float(ai["swat_chance"])
+		_swat_lead = float(ai["swat_lead_s"]) + rng.randfn(0.0, float(ai["swat_error_s"]))
+		_reach_until = -1.0
+	var f: Dictionary = ctx["flight"]
+	var ball_now := BallFlight.position_at(f["p0"], f["fl"], float(f["g"]), float(f["t"]))
+	if float(f["t"]) <= _reach_until:
+		out["move"] = (Vector2(ball_now.x, ball_now.z) - Vector2(ctx["pos"])).normalized()
+		out["sprint"] = false
+		out["hold_move"] = true
+		return
+	if not _swat_go:
+		return
+	var fl: Dictionary = f["fl"]
+	var pos: Vector2 = ctx["pos"]
+	var vel: Vector2 = Vector2(ctx["heading"]) * float(ctx["speed"])
+	var ahead := 0.0
+	while ahead <= float(ai["swat_look_ahead_s"]):
+		var tt := minf(float(f["t"]) + ahead, float(fl["T"]))
+		var b := BallFlight.position_at(f["p0"], fl, float(f["g"]), tt)
+		var me := pos + vel * ahead
+		if b.y >= float(sw["min_height"]) and b.y <= float(sw["max_height"]) \
+				and me.distance_to(Vector2(b.x, b.z)) <= float(sw["radius"]) * 0.9:
+			if ahead <= _swat_lead:
+				out["swat"] = true
+				_swat_go = false
+				_reach_until = float(f["t"]) + float(sw["window_s"])
+				out["move"] = (Vector2(ball_now.x, ball_now.z) - pos).normalized()
+				out["sprint"] = false
+				out["hold_move"] = true
+			elif ahead <= _swat_lead + float(ai["swat_turn_s"]):
+				# Turn back to the ball so the reach can be a pick, not just a deflection.
+				out["move"] = (Vector2(ball_now.x, ball_now.z) - pos).normalized()
+				out["sprint"] = false
+				out["hold_move"] = true
+			return
+		if tt >= float(fl["T"]):
+			return
+		ahead += 1.0 / 60.0
 
 
 # --------------------------------------------------------------- defense
